@@ -335,6 +335,10 @@ export async function executeRyvenCommand(
       const wfStatus = (res.metadata?.["status"] as string) || "COMPLETED";
       steps.push({ label: "Workflow Engine", detail: `${wfName} [${wfStatus}]` });
 
+      if (wfName === "project_development" || wfName === "project_creation") {
+        steps.push({ label: "Project Intelligence", detail: "Specification & File Plan ✓" });
+      }
+
       if (Array.isArray(res.metadata?.["steps"])) {
         const wfSteps = res.metadata["steps"] as Array<{
           name?: string;
@@ -349,6 +353,14 @@ export async function executeRyvenCommand(
           });
         });
       }
+
+      if (filesCount !== undefined) {
+        steps.push({
+          label: "Code Generation",
+          detail: `${filesCount} files generated & validated ✓`,
+        });
+      }
+
       steps.push({
         label: "Workflow Status",
         detail: wfStatus === "COMPLETED" ? "WORKFLOW COMPLETED ✓" : `${wfStatus} ✗`,

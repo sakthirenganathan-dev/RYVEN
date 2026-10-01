@@ -21,8 +21,8 @@ class WorkflowPlanner:
     # Regex patterns identifying project scaffolding requests
     PROJECT_CREATION_PATTERNS = [
         r"\b(?:create|build|scaffold|generate|setup|set\s+up)\s+(?:a\s+)?(?:new\s+)?(?:(?P<type>react|python|web|vanilla|html|node|frontend)\s+)?project\s+(?:called|named)\s+['\"]?(?P<name>[^\s'\"]+)['\"]?\b",
-        r"\b(?:create|build|scaffold|generate|setup|set\s+up)\s+(?:a\s+)?(?:new\s+)?project\s+['\"]?(?P<name>[^\s'\"]+)['\"]?\s+(?:in|using|with)\s+(?P<type>react|python|web|vanilla|html|node)\b",
-        r"\b(?:create|build|scaffold|generate|setup|set\s+up)\s+(?:a\s+)?(?:new\s+)?(?:(?P<type>react|python|web|vanilla|html|node|frontend)\s+)?project\s+['\"]?(?P<name>[a-zA-Z0-9_\-]+)['\"]?\b",
+        r"\b(?:create|build|scaffold|generate|setup|set\s+up)\s+(?:a\s+)?(?:new\s+)?project\s+['\"]?(?P<name>(?!in\b|using\b|with\b)[^\s'\"]+)['\"]?\s+(?:in|using|with)\s+(?P<type>react|python|web|vanilla|html|node)\b",
+        r"\b(?:create|build|scaffold|generate|setup|set\s+up)\s+(?:a\s+)?(?:new\s+)?(?:(?P<type>react|python|web|vanilla|html|node|frontend)\s+)?project\s+['\"]?(?P<name>(?!in\b|using\b|with\b|for\b|from\b)[a-zA-Z0-9_\-]+)['\"]?\b",
     ]
 
     def __init__(self, registry: Optional[ToolRegistry] = None) -> None:
@@ -90,9 +90,10 @@ class WorkflowPlanner:
         project_type: str = "web",
         requested_by: str = "user",
     ) -> Optional[WorkflowDefinition]:
-        """Generate the Project Builder Workflow plan for creating and scaffolding a project."""
+        """Generate the Project Builder Workflow plan for creating and scaffolding a project (Phase 4.1 compatibility)."""
         p_type = (project_type or "web").lower().strip()
         from app.tools.project_tool import sanitize_project_name
+        from typing import Dict, List
 
         clean_name = sanitize_project_name(project_name)
         if not clean_name:
@@ -127,7 +128,7 @@ class WorkflowPlanner:
 
         steps: List[WorkflowStep] = [
             WorkflowStep(
-                name=f"Create Project Workspace Directory",
+                name="Create Project Workspace Directory",
                 tool_name="create_project_folder",
                 arguments={"project_name": clean_name},
                 requires_confirmation=True,
@@ -179,6 +180,97 @@ class WorkflowPlanner:
         logger.info(f"Planned project creation workflow '{workflow.name}' with {len(steps)} steps.")
         return workflow
 
+    def plan_project_development(
+        self,
+        query: str,
+        project_name: Optional[str] = None,
+        project_type: Optional[str] = None,
+        requested_by: str = "user",
+    ) -> Optional[WorkflowDefinition]:
+        """Generate complete Project Development workflow using the DEV ENGINE v1 pipeline."""
+        from app.dev_engine.specification import ProjectSpecificationEngine
+        from app.dev_engine.file_plan import FilePlanEngine
+        from app.dev_engine.generator import CodeGenerationEngine
+        from typing import List
+
+        spec_engine = ProjectSpecificationEngine()
+        file_plan_engine = FilePlanEngine()
+        code_gen_engine = CodeGenerationEngine()
+
+        # 1. Synthesize ProjectSpecification
+        spec = spec_engine.create_specification(
+            project_name=project_name or "my_project",
+            query=query,
+            explicit_type=project_type,
+        )
+        if not spec:
+            return None
+
+        # 2. Formulate FilePlan
+        plan = file_plan_engine.create_file_plan(spec, overwrite_allowed=False)
+
+        # 3. Generate in-memory GeneratedFile representations
+        try:
+            generated_files = code_gen_engine.generate_files(spec, plan)
+        except Exception as exc:
+            logger.error(f"CodeGenerationEngine error for '{spec.project_name}': {exc}", exc_info=True)
+            return None
+
+        # 4. Formulate Workflow Steps
+        steps: List[WorkflowStep] = [
+            WorkflowStep(
+                name="Create Project Workspace Directory",
+                tool_name="create_project_folder",
+                arguments={"project_name": spec.project_name},
+                requires_confirmation=True,
+            )
+        ]
+
+        # Add file creation steps
+        for gen_file in generated_files:
+            steps.append(
+                WorkflowStep(
+                    name=f"Generate {gen_file.relative_path}",
+                    tool_name="create_project_file",
+                    arguments={
+                        "project_name": spec.project_name,
+                        "relative_path": gen_file.relative_path,
+                        "content": gen_file.content,
+                    },
+                    requires_confirmation=True,
+                )
+            )
+
+        # Validation step
+        steps.append(
+            WorkflowStep(
+                name="Validate Project Files",
+                tool_name="validate_project_files",
+                arguments={
+                    "project_name": spec.project_name,
+                    "expected_files": spec.expected_files,
+                },
+                requires_confirmation=False,
+            )
+        )
+
+        # Verify all tools exist in registry
+        for step in steps:
+            if not self.registry.has(step.tool_name):
+                logger.error(
+                    f"Cannot plan project creation: required tool '{step.tool_name}' is not registered."
+                )
+                return None
+
+        workflow = WorkflowDefinition(
+            name=f"Build {spec.framework.capitalize()} Project: {spec.project_name}",
+            description=f"{spec.description} ({len(generated_files)} files planned).",
+            requested_by=requested_by,
+            steps=steps,
+        )
+        logger.info(f"Planned DEV ENGINE project workflow '{workflow.name}' with {len(steps)} steps.")
+        return workflow
+
     def plan(self, query: str, requested_by: str = "user") -> Optional[WorkflowDefinition]:
         """Convert a user request into a supported workflow plan, if recognized."""
         clean = query.strip()
@@ -188,6 +280,12 @@ class WorkflowPlanner:
         if any(pattern.search(clean) for pattern in self._compiled_workspace_prep):
             return self.plan_workspace_preparation(clean, requested_by=requested_by)
 
+        # Check for explicit dev engine / rich features request
+        is_rich_dev_request = any(
+            token in clean.lower()
+            for token in ["expense tracker", "dashboard", "features", "authentication", "dark futuristic", "dev engine"]
+        )
+
         # 2. Project creation check
         for pattern in self._compiled_project_creation:
             match = pattern.search(clean)
@@ -195,9 +293,28 @@ class WorkflowPlanner:
                 group_dict = match.groupdict()
                 project_name = group_dict.get("name") or "my_project"
                 project_type = group_dict.get("type") or "web"
+                if is_rich_dev_request:
+                    return self.plan_project_development(
+                        query=clean,
+                        project_name=project_name,
+                        project_type=project_type,
+                        requested_by=requested_by,
+                    )
                 return self.plan_project_creation(
                     project_name=project_name,
                     project_type=project_type,
+                    requested_by=requested_by,
+                )
+
+        if is_rich_dev_request:
+            # Fallback to dev engine if rich dev request matches general pattern
+            from app.dev_engine.specification import ProjectSpecificationEngine
+            spec = ProjectSpecificationEngine().create_specification(query=clean)
+            if spec:
+                return self.plan_project_development(
+                    query=clean,
+                    project_name=spec.project_name,
+                    project_type=spec.project_type.value,
                     requested_by=requested_by,
                 )
 

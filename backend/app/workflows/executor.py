@@ -146,6 +146,14 @@ class WorkflowExecutor:
         elif workflow.status == WorkflowState.CANCELLED:
             workflow.final_result = f"Workflow '{workflow.name}' was cancelled."
 
+        # Aggregate metadata from steps (e.g. project files_created)
+        wf_meta: Dict[str, Any] = {}
+        for d in completed_details:
+            if "files_created" in d:
+                wf_meta["files_created"] = d["files_created"]
+            if "project_name" in d:
+                wf_meta["project_name"] = d["project_name"]
+
         return WorkflowExecutionResult(
             workflow_id=workflow.workflow_id,
             name=workflow.name,
@@ -159,4 +167,6 @@ class WorkflowExecutor:
             started_at=workflow.started_at,
             completed_at=workflow.completed_at,
             error=workflow.error,
+            metadata=wf_meta,
         )
+

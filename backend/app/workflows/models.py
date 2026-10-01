@@ -95,3 +95,4 @@ class WorkflowExecutionResult(BaseModel):
     started_at: Optional[str] = None
     completed_at: Optional[str] = None
     error: Optional[str] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)

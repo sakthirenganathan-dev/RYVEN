@@ -114,9 +114,13 @@ class IntentRouter:
     ]
 
     PROJECT_CREATION_PATTERNS = [
-        r"\b(?:create|build|scaffold|generate|setup|set\s+up)\s+(?:a\s+)?(?:new\s+)?(?:(?P<type>react|python|web|vanilla|html|node|frontend)\s+)?project\s+(?:called|named)\s+['\"]?(?P<name>[^\s'\"]+)['\"]?\b",
-        r"\b(?:create|build|scaffold|generate|setup|set\s+up)\s+(?:a\s+)?(?:new\s+)?project\s+['\"]?(?P<name>[^\s'\"]+)['\"]?\s+(?:in|using|with)\s+(?P<type>react|python|web|vanilla|html|node)\b",
-        r"\b(?:create|build|scaffold|generate|setup|set\s+up)\s+(?:a\s+)?(?:new\s+)?(?:(?P<type>react|python|web|vanilla|html|node|frontend)\s+)?project\s+['\"]?(?P<name>[a-zA-Z0-9_\-]+)['\"]?\b",
+        r"\b(?:create|build|scaffold|generate|setup|set\s+up)\s+(?:a\s+)?(?:new\s+)?(?:(?P<type>react|python\s+api|python|web|vanilla|html|node|frontend|fastapi)\s+)?project\s+(?:called|named)\s+['\"]?(?P<name>[^\s'\"]+)['\"]?\b",
+        r"\b(?:create|build|scaffold|generate|setup|set\s+up)\s+(?:a\s+)?(?:new\s+)?project\s+['\"]?(?P<name>[^\s'\"]+)['\"]?\s+(?:in|using|with)\s+(?P<type>react|python\s+api|python|web|vanilla|html|node|fastapi)\b",
+        r"\b(?:create|build|scaffold|generate|setup|set\s+up)\s+(?:a\s+)?(?:new\s+)?(?:(?P<type>react|python\s+api|python|web|vanilla|html|node|frontend|fastapi)\s+)?project\s+['\"]?(?P<name>[a-zA-Z0-9_\-]+)['\"]?\b",
+        r"\b(?:create|build|make(?:\s+me)?)\s+(?:a\s+)?(?:new\s+)?(?P<type>react|python|web|html|fastapi)\s+(?P<name>[a-zA-Z0-9_\-]+(?:\s+[a-zA-Z0-9_\-]+)?)\s+(?:app|application|website|tracker|dashboard|api)\b",
+        r"\b(?:create|build)\s+(?:a\s+)?(?:simple\s+)?(?P<type>html|web)\s+website\b",
+        r"\b(?:create|build)\s+(?:a\s+)?(?P<type>frontend)\s+dashboard\b",
+        r"\b(?:build\s+a\s+portfolio\s+website)\b",
     ]
 
     def __init__(self) -> None:

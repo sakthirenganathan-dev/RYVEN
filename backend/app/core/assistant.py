@@ -127,6 +127,7 @@ class Assistant:
                         "steps_failed": wf_result.steps_failed,
                         "steps": wf_result.step_details,
                         "error": wf_result.error,
+                        **wf_result.metadata,
                     },
                 )
 
