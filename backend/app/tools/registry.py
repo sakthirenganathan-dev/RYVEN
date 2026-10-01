@@ -34,6 +34,10 @@ class ToolRegistry:
         """Check if a tool exists in the registry."""
         return name.lower() in self._tools
 
+    def has(self, name: str) -> bool:
+        """Alias for has_tool."""
+        return self.has_tool(name)
+
     def list_tools(self) -> List[str]:
         """Return names of all currently registered tools."""
         return [tool.name for tool in self._tools.values()]
@@ -41,3 +45,29 @@ class ToolRegistry:
     def get_tool_schemas(self) -> List[Dict[str, Any]]:
         """Return metadata for all registered tools."""
         return [tool.get_info() for tool in self._tools.values()]
+
+
+def create_default_registry() -> ToolRegistry:
+    """Instantiate and populate a ToolRegistry with all standard Phase 3 safe tools."""
+    from app.tools.time_tool import TimeTool
+    from app.tools.system_tool import SystemStatusTool
+    from app.tools.system_info_tool import SystemInfoTool
+    from app.tools.app_tool import OpenApplicationTool
+    from app.tools.website_tool import OpenWebsiteTool
+    from app.tools.folder_tool import OpenFolderTool
+    from app.tools.search_tool import SearchFilesTool
+    from app.tools.file_tool import OpenFileTool
+    from app.tools.clipboard_tool import GetClipboardTool, SetClipboardTool
+
+    registry = ToolRegistry()
+    registry.register(TimeTool())
+    registry.register(SystemStatusTool())
+    registry.register(SystemInfoTool())
+    registry.register(OpenApplicationTool())
+    registry.register(OpenWebsiteTool())
+    registry.register(OpenFolderTool())
+    registry.register(SearchFilesTool())
+    registry.register(OpenFileTool())
+    registry.register(GetClipboardTool())
+    registry.register(SetClipboardTool())
+    return registry

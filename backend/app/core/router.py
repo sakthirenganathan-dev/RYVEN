@@ -7,11 +7,12 @@ from app.core.logging_config import logger
 
 
 class RouteDecision(BaseModel):
-    """Decision indicating whether to execute a tool or delegate to the AI engine."""
+    """Decision indicating whether to execute a tool, a workflow, or delegate to the AI engine."""
 
-    intent: Literal["tool", "ai"]
+    intent: Literal["tool", "ai", "workflow"]
     tool_name: Optional[str] = None
     tool_arguments: Dict[str, Any] = Field(default_factory=dict)
+    workflow_name: Optional[str] = None
     reason: str
 
 
@@ -104,10 +105,21 @@ class IntentRouter:
         re.IGNORECASE,
     )
 
+    # Multi-step Workflow patterns (Phase 4)
+    WORKSPACE_PREP_PATTERNS = [
+        r"\b(?:prepare(?:\s+my)?(?:\s+(?:development|dev))?\s+workspace)\b",
+        r"\b(?:set(?:\s+)?up(?:\s+my)?(?:\s+(?:development|dev))?\s+workspace)\b",
+        r"\b(?:open(?:\s+my)?(?:\s+(?:development|dev))\s+workspace)\b",
+        r"\b(?:initialize(?:\s+my)?(?:\s+(?:development|dev))?\s+workspace)\b",
+    ]
+
     def __init__(self) -> None:
         self._compiled_time = [re.compile(p, re.IGNORECASE) for p in self.TIME_PATTERNS]
         self._compiled_system = [re.compile(p, re.IGNORECASE) for p in self.SYSTEM_PATTERNS]
         self._compiled_system_info = [re.compile(p, re.IGNORECASE) for p in self.SYSTEM_INFO_PATTERNS]
+        self._compiled_workspace_prep = [
+            re.compile(p, re.IGNORECASE) for p in self.WORKSPACE_PREP_PATTERNS
+        ]
 
     def _strip_invocation_prefix(self, text: str) -> str:
         """Strip conversational address prefix such as 'RYVEN, ' or 'Jarvis '."""
@@ -119,6 +131,17 @@ class IntentRouter:
         """Analyze message intent and route to appropriate handler."""
         raw_text = message.strip()
         clean_text = self._strip_invocation_prefix(raw_text)
+
+        # 0. Check for Multi-Step Workflows (Phase 4)
+        for pattern in self._compiled_workspace_prep:
+            if pattern.search(clean_text):
+                decision = RouteDecision(
+                    intent="workflow",
+                    workflow_name="workspace_prep",
+                    reason="Matched development workspace preparation workflow request",
+                )
+                logger.info(f"Router decision: workflow='workspace_prep' for message='{raw_text[:40]}...'")
+                return decision
 
         # 1. Clipboard Write (Set)
         for pattern in self.CLIPBOARD_SET_PATTERNS:

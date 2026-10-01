@@ -269,7 +269,7 @@ export function getAntigravityBridgeStatus(): AntigravityBridgeConfig {
 
 export interface RyvenApiChatResponse {
   success: boolean;
-  type: "tool" | "ai";
+  type: "tool" | "ai" | "workflow" | "error";
   message: string;
   tool: string | null;
   metadata: Record<string, unknown>;
@@ -329,7 +329,31 @@ export async function executeRyvenCommand(
     let mode: HudMode = "chat";
     const steps: CommandStep[] = [{ label: "Voice / Input", detail: text }];
 
-    if (res.type === "tool") {
+    if (res.type === "workflow") {
+      mode = "developer";
+      const wfName = (res.metadata?.["workflow_name"] as string) || "Workflow";
+      const wfStatus = (res.metadata?.["status"] as string) || "COMPLETED";
+      steps.push({ label: "Workflow Engine", detail: `${wfName} [${wfStatus}]` });
+
+      if (Array.isArray(res.metadata?.["steps"])) {
+        const wfSteps = res.metadata["steps"] as Array<{
+          name?: string;
+          tool_name?: string;
+          status?: string;
+        }>;
+        wfSteps.forEach((s) => {
+          const mark = s.status === "SUCCESS" ? "✓" : s.status === "FAILED" ? "✗" : "•";
+          steps.push({
+            label: s.name || s.tool_name || "Workflow Step",
+            detail: `${s.status ?? "DONE"} ${mark}`,
+          });
+        });
+      }
+      steps.push({
+        label: "Workflow Status",
+        detail: wfStatus === "COMPLETED" ? "WORKFLOW COMPLETED ✓" : `${wfStatus} ✗`,
+      });
+    } else if (res.type === "tool") {
       if (res.tool === "system_status" || res.tool === "system_info") {
         mode = "system";
       } else if (

@@ -18,7 +18,7 @@ class ChatResponse(BaseModel):
     """Structured response returned by the Assistant."""
 
     success: bool = Field(default=True, description="Indicates if the request was successfully processed")
-    type: Literal["tool", "ai", "error"] = Field(..., description="The response generator type")
+    type: Literal["tool", "ai", "workflow", "error"] = Field(..., description="The response generator type")
     message: str = Field(..., description="Human-readable response message")
     tool: Optional[str] = Field(default=None, description="Name of the tool executed, if applicable")
     metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional contextual metadata")
