@@ -1,0 +1,265 @@
+@import "tailwindcss" source(none);
+@source "../src";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+/*
+ * RYVEN — holographic command environment design system.
+ * All colors are oklch tokens. Never hardcode colors in components.
+ */
+
+@theme inline {
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --radius-2xl: calc(var(--radius) + 8px);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-holo: var(--holo);
+  --color-holo-dim: var(--holo-dim);
+  --color-holo-deep: var(--holo-deep);
+  --color-violet: var(--violet);
+  --color-signal: var(--signal);
+  --font-display: "Orbitron", system-ui, sans-serif;
+  --font-sans: "Rajdhani", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+}
+
+:root {
+  --radius: 0.25rem;
+
+  --background: oklch(0.15 0.015 240);
+  --foreground: oklch(0.96 0.01 220);
+
+  --holo: oklch(0.85 0.14 205);
+  --holo-dim: oklch(0.62 0.09 210);
+  --holo-deep: oklch(0.36 0.07 225);
+  --violet: oklch(0.65 0.14 285);
+  --signal: oklch(0.85 0.17 150);
+
+  --card: oklch(0.2 0.02 235 / 0.42);
+  --card-foreground: oklch(0.96 0.01 220);
+  --popover: oklch(0.18 0.02 235 / 0.92);
+  --popover-foreground: oklch(0.96 0.01 220);
+  --primary: oklch(0.85 0.14 205);
+  --primary-foreground: oklch(0.16 0.02 240);
+  --secondary: oklch(0.26 0.03 240 / 0.6);
+  --secondary-foreground: oklch(0.94 0.01 220);
+  --muted: oklch(0.26 0.02 240 / 0.5);
+  --muted-foreground: oklch(0.68 0.03 220);
+  --accent: oklch(0.65 0.14 285);
+  --accent-foreground: oklch(0.96 0.01 220);
+  --destructive: oklch(0.65 0.2 25);
+  --destructive-foreground: oklch(0.97 0.01 220);
+  --border: oklch(0.85 0.14 205 / 0.22);
+  --input: oklch(0.85 0.14 205 / 0.25);
+  --ring: oklch(0.85 0.14 205 / 0.6);
+
+  --glow-core: 0 0 40px oklch(0.85 0.14 205 / 0.35), 0 0 120px oklch(0.85 0.14 205 / 0.18);
+  --glow-soft: 0 0 18px oklch(0.85 0.14 205 / 0.22);
+  --panel-surface: linear-gradient(
+    135deg,
+    oklch(0.32 0.04 225 / 0.28),
+    oklch(0.18 0.02 240 / 0.16)
+  );
+}
+
+@layer base {
+  * {
+    border-color: var(--color-border);
+  }
+
+  html,
+  body {
+    background-color: var(--color-background);
+    color: var(--color-foreground);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  body {
+    overflow: hidden;
+  }
+
+  ::selection {
+    background: oklch(0.85 0.14 205 / 0.3);
+  }
+}
+
+/* ---------- holographic utilities ---------- */
+
+@utility holo-panel {
+  background: var(--panel-surface);
+  border: 1px solid var(--color-border);
+  backdrop-filter: blur(6px);
+  box-shadow:
+    inset 0 0 24px oklch(0.85 0.14 205 / 0.06),
+    0 0 24px oklch(0.15 0.02 240 / 0.6);
+}
+
+@utility holo-label {
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--color-holo-dim);
+}
+
+@utility holo-title {
+  font-family: var(--font-display);
+  letter-spacing: 0.32em;
+  text-transform: uppercase;
+}
+
+@utility text-glow {
+  text-shadow: 0 0 12px oklch(0.85 0.14 205 / 0.55);
+}
+
+@utility glow-core {
+  box-shadow: var(--glow-core);
+}
+
+@utility glow-soft {
+  box-shadow: var(--glow-soft);
+}
+
+/* corner ticks on floating panels */
+@utility holo-corners {
+  position: relative;
+}
+
+.holo-corners::before,
+.holo-corners::after {
+  content: "";
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  border: 1px solid var(--color-holo);
+  opacity: 0.8;
+  pointer-events: none;
+}
+.holo-corners::before {
+  top: -1px;
+  left: -1px;
+  border-right: 0;
+  border-bottom: 0;
+}
+.holo-corners::after {
+  bottom: -1px;
+  right: -1px;
+  border-left: 0;
+  border-top: 0;
+}
+
+/* ---------- keyframes ---------- */
+
+@keyframes holo-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes holo-spin-rev {
+  to {
+    transform: rotate(-360deg);
+  }
+}
+@keyframes holo-breathe {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 0.85;
+  }
+  50% {
+    transform: scale(1.04);
+    opacity: 1;
+  }
+}
+@keyframes holo-scan {
+  0% {
+    transform: translateY(-110%);
+    opacity: 0;
+  }
+  15% {
+    opacity: 1;
+  }
+  85% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(1100%);
+    opacity: 0;
+  }
+}
+@keyframes holo-pulse-ring {
+  0% {
+    transform: scale(0.85);
+    opacity: 0.55;
+  }
+  100% {
+    transform: scale(1.9);
+    opacity: 0;
+  }
+}
+@keyframes holo-flicker {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  48% {
+    opacity: 0.86;
+  }
+  52% {
+    opacity: 1;
+  }
+}
+
+.anim-spin-slow {
+  animation: holo-spin 28s linear infinite;
+}
+.anim-spin-med {
+  animation: holo-spin-rev 16s linear infinite;
+}
+.anim-spin-fast {
+  animation: holo-spin 7s linear infinite;
+}
+.anim-breathe {
+  animation: holo-breathe 5.5s ease-in-out infinite;
+}
+.anim-flicker {
+  animation: holo-flicker 6s ease-in-out infinite;
+}
+
+.scan-line {
+  position: absolute;
+  inset-inline: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--color-holo), transparent);
+  animation: holo-scan 2.4s linear infinite;
+  pointer-events: none;
+  opacity: 0.6;
+}
+
+/* thin scrollbars inside panels */
+.holo-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-holo-deep) transparent;
+}

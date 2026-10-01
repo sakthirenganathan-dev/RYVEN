@@ -1,0 +1,65 @@
+"""Configuration management for RYVEN backend."""
+
+import os
+from pathlib import Path
+from typing import List
+from dotenv import load_dotenv
+from pydantic import BaseModel, Field
+
+# Load .env file from project or backend directory
+BASE_DIR = Path(__file__).resolve().parent.parent.parent
+load_dotenv(BASE_DIR / ".env")
+
+
+class Settings(BaseModel):
+    """Application settings loaded from environment variables."""
+
+    app_name: str = "RYVEN Backend"
+    version: str = "2.0.0"
+    environment: str = Field(default_factory=lambda: os.getenv("ENVIRONMENT", "development"))
+    debug: bool = Field(default_factory=lambda: os.getenv("DEBUG", "false").lower() in ("true", "1", "yes"))
+    host: str = Field(default_factory=lambda: os.getenv("HOST", "127.0.0.1"))
+    port: int = Field(default_factory=lambda: int(os.getenv("PORT", "8000")))
+
+    # CORS
+    allowed_origins: List[str] = Field(
+        default_factory=lambda: [
+            origin.strip()
+            for origin in os.getenv(
+                "ALLOWED_ORIGINS",
+                "http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000,http://127.0.0.1:3000",
+            ).split(",")
+            if origin.strip()
+        ]
+    )
+
+    # AI Provider (Ollama)
+    ollama_base_url: str = Field(
+        default_factory=lambda: os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
+    )
+    ollama_model: str = Field(default_factory=lambda: os.getenv("OLLAMA_MODEL", "qwen2.5:7b"))
+    ollama_timeout_seconds: float = Field(
+        default_factory=lambda: float(os.getenv("OLLAMA_TIMEOUT_SECONDS", "120.0"))
+    )
+
+    # Conversation Context
+    max_history_messages: int = Field(
+        default_factory=lambda: int(os.getenv("MAX_HISTORY_MESSAGES", "20"))
+    )
+
+    # Phase 3 Tool Settings
+    max_search_results: int = Field(
+        default_factory=lambda: int(os.getenv("MAX_SEARCH_RESULTS", "20"))
+    )
+    clipboard_max_length: int = Field(
+        default_factory=lambda: int(os.getenv("CLIPBOARD_MAX_LENGTH", "10000"))
+    )
+    tool_timeout_seconds: float = Field(
+        default_factory=lambda: float(os.getenv("TOOL_TIMEOUT_SECONDS", "10.0"))
+    )
+
+    # Logging
+    log_level: str = Field(default_factory=lambda: os.getenv("LOG_LEVEL", "INFO").upper())
+
+
+settings = Settings()
