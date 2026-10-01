@@ -79,13 +79,24 @@ class WorkflowEngine:
         result = await self.executor.execute(workflow, auto_confirm=auto_confirm)
         return result
 
-    async def run_from_query(self, query: str) -> Optional[WorkflowExecutionResult]:
+    async def run_from_query(
+        self, query: str, auto_confirm: bool = True
+    ) -> Optional[WorkflowExecutionResult]:
         """High-level entry point: Plan, validate, and execute in one coordinated run."""
         workflow = self.plan_workflow(query)
         if not workflow:
             return None
 
-        return await self.execute_workflow(workflow)
+        return await self.execute_workflow(workflow, auto_confirm=auto_confirm)
+
+    async def resume_workflow(self, workflow_id: str) -> Optional[WorkflowExecutionResult]:
+        """Resume execution of a workflow paused in WAITING_FOR_CONFIRMATION state."""
+        workflow = self._active_workflows.get(workflow_id)
+        if not workflow or workflow.status != WorkflowState.WAITING_FOR_CONFIRMATION:
+            return None
+
+        logger.info(f"Resuming confirmed workflow '{workflow.name}' (ID: {workflow_id})")
+        return await self.executor.execute(workflow, auto_confirm=True)
 
     def cancel_workflow(self, workflow_id: str) -> bool:
         """Signal a workflow to cancel execution safely."""

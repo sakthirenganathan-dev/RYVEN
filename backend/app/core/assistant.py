@@ -35,19 +35,10 @@ class Assistant:
         safety: Optional[SafetyGuard] = None,
         workflow_engine: Optional[WorkflowEngine] = None,
     ) -> None:
-        # 1. Safe Tool Registry with Phase 3 tools
+        # 1. Safe Tool Registry with all registered tools
         if registry is None:
-            self.registry = ToolRegistry()
-            self.registry.register(TimeTool())
-            self.registry.register(SystemStatusTool())
-            self.registry.register(SystemInfoTool())
-            self.registry.register(OpenApplicationTool())
-            self.registry.register(OpenWebsiteTool())
-            self.registry.register(OpenFolderTool())
-            self.registry.register(SearchFilesTool())
-            self.registry.register(OpenFileTool())
-            self.registry.register(GetClipboardTool())
-            self.registry.register(SetClipboardTool())
+            from app.tools.registry import create_default_registry
+            self.registry = create_default_registry()
         else:
             self.registry = registry
 
@@ -77,7 +68,12 @@ class Assistant:
             f"Registered Tools: {self.registry.list_tools()}"
         )
 
-    async def process(self, message: str, session_id: str = "default") -> ChatResponse:
+    async def process(
+        self,
+        message: str,
+        session_id: str = "default",
+        auto_confirm: bool = True,
+    ) -> ChatResponse:
         """Process incoming user message through security validation, intent classification, workflows, tools, or AI with context."""
         clean_text = message.strip()
         logger.info(f"Incoming message received (session='{session_id}', length={len(clean_text)})")
@@ -106,10 +102,12 @@ class Assistant:
         # 1. Evaluate intent
         decision = self.router.route(clean_text)
 
-        # 2. Workflow Execution Path (Phase 4)
+        # 2. Workflow Execution Path (Phase 4 & 4.1)
         if decision.intent == "workflow":
             logger.info(f"Executing workflow for intent: '{decision.workflow_name}'")
-            wf_result = await self.workflow_engine.run_from_query(clean_text)
+            wf_result = await self.workflow_engine.run_from_query(
+                clean_text, auto_confirm=auto_confirm
+            )
             if wf_result:
                 display_message = wf_result.message
                 self.context_manager.add_user_message(session_id, clean_text)

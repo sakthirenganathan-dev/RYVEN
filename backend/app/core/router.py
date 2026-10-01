@@ -105,12 +105,18 @@ class IntentRouter:
         re.IGNORECASE,
     )
 
-    # Multi-step Workflow patterns (Phase 4)
+    # Multi-step Workflow patterns (Phase 4 & 4.1)
     WORKSPACE_PREP_PATTERNS = [
         r"\b(?:prepare(?:\s+my)?(?:\s+(?:development|dev))?\s+workspace)\b",
         r"\b(?:set(?:\s+)?up(?:\s+my)?(?:\s+(?:development|dev))?\s+workspace)\b",
         r"\b(?:open(?:\s+my)?(?:\s+(?:development|dev))\s+workspace)\b",
         r"\b(?:initialize(?:\s+my)?(?:\s+(?:development|dev))?\s+workspace)\b",
+    ]
+
+    PROJECT_CREATION_PATTERNS = [
+        r"\b(?:create|build|scaffold|generate|setup|set\s+up)\s+(?:a\s+)?(?:new\s+)?(?:(?P<type>react|python|web|vanilla|html|node|frontend)\s+)?project\s+(?:called|named)\s+['\"]?(?P<name>[^\s'\"]+)['\"]?\b",
+        r"\b(?:create|build|scaffold|generate|setup|set\s+up)\s+(?:a\s+)?(?:new\s+)?project\s+['\"]?(?P<name>[^\s'\"]+)['\"]?\s+(?:in|using|with)\s+(?P<type>react|python|web|vanilla|html|node)\b",
+        r"\b(?:create|build|scaffold|generate|setup|set\s+up)\s+(?:a\s+)?(?:new\s+)?(?:(?P<type>react|python|web|vanilla|html|node|frontend)\s+)?project\s+['\"]?(?P<name>[a-zA-Z0-9_\-]+)['\"]?\b",
     ]
 
     def __init__(self) -> None:
@@ -119,6 +125,9 @@ class IntentRouter:
         self._compiled_system_info = [re.compile(p, re.IGNORECASE) for p in self.SYSTEM_INFO_PATTERNS]
         self._compiled_workspace_prep = [
             re.compile(p, re.IGNORECASE) for p in self.WORKSPACE_PREP_PATTERNS
+        ]
+        self._compiled_project_creation = [
+            re.compile(p, re.IGNORECASE) for p in self.PROJECT_CREATION_PATTERNS
         ]
 
     def _strip_invocation_prefix(self, text: str) -> str:
@@ -132,7 +141,7 @@ class IntentRouter:
         raw_text = message.strip()
         clean_text = self._strip_invocation_prefix(raw_text)
 
-        # 0. Check for Multi-Step Workflows (Phase 4)
+        # 0. Check for Multi-Step Workflows (Phase 4 & 4.1)
         for pattern in self._compiled_workspace_prep:
             if pattern.search(clean_text):
                 decision = RouteDecision(
@@ -141,6 +150,22 @@ class IntentRouter:
                     reason="Matched development workspace preparation workflow request",
                 )
                 logger.info(f"Router decision: workflow='workspace_prep' for message='{raw_text[:40]}...'")
+                return decision
+
+        for pattern in self._compiled_project_creation:
+            match = pattern.search(clean_text)
+            if match:
+                g = match.groupdict()
+                decision = RouteDecision(
+                    intent="workflow",
+                    workflow_name="create_project",
+                    tool_arguments={
+                        "project_name": g.get("name", "my_app"),
+                        "project_type": g.get("type", "web"),
+                    },
+                    reason="Matched project builder workflow request",
+                )
+                logger.info(f"Router decision: workflow='create_project' for message='{raw_text[:40]}...'")
                 return decision
 
         # 1. Clipboard Write (Set)

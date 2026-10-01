@@ -91,5 +91,26 @@ class WorkflowValidator:
                     workflow.error = reason
                     return False, reason
 
+            elif tool_name == "create_project_folder":
+                from app.tools.project_tool import sanitize_project_name, resolve_project_path
+                p_name = step.arguments.get("project_name", "")
+                if not sanitize_project_name(p_name) or not resolve_project_path(p_name):
+                    reason = f"Step {idx} ({step.name}) rejected: invalid or escaping project name '{p_name}'"
+                    logger.warning(f"Workflow validation BLOCKED: {reason}")
+                    workflow.status = WorkflowState.BLOCKED
+                    workflow.error = reason
+                    return False, reason
+
+            elif tool_name == "create_project_file":
+                from app.tools.project_tool import resolve_project_file_path
+                p_name = step.arguments.get("project_name", "")
+                r_path = step.arguments.get("relative_path", "")
+                if not resolve_project_file_path(p_name, r_path):
+                    reason = f"Step {idx} ({step.name}) rejected: unsafe file path '{r_path}' for project '{p_name}'"
+                    logger.warning(f"Workflow validation BLOCKED: {reason}")
+                    workflow.status = WorkflowState.BLOCKED
+                    workflow.error = reason
+                    return False, reason
+
         logger.info(f"Workflow '{workflow.name}' ({len(workflow.steps)} steps) successfully validated.")
         return True, None

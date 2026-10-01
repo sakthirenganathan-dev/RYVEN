@@ -58,6 +58,11 @@ def create_default_registry() -> ToolRegistry:
     from app.tools.search_tool import SearchFilesTool
     from app.tools.file_tool import OpenFileTool
     from app.tools.clipboard_tool import GetClipboardTool, SetClipboardTool
+    from app.tools.project_tool import (
+        CreateProjectFolderTool,
+        CreateProjectFileTool,
+        ValidateProjectFilesTool,
+    )
 
     registry = ToolRegistry()
     registry.register(TimeTool())
@@ -70,4 +75,7 @@ def create_default_registry() -> ToolRegistry:
     registry.register(OpenFileTool())
     registry.register(GetClipboardTool())
     registry.register(SetClipboardTool())
+    registry.register(CreateProjectFolderTool())
+    registry.register(CreateProjectFileTool())
+    registry.register(ValidateProjectFilesTool())
     return registry

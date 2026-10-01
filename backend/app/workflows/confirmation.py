@@ -8,7 +8,7 @@ from app.workflows.models import WorkflowStep
 class ConfirmationManager:
     """Manages approvals for safe vs. potentially impactful workflow actions."""
 
-    # Set of tool names considered safe for automated sequence execution in Phase 4 v1
+    # Set of tool names considered safe for automated sequence execution
     SAFE_AUTO_EXECUTE_TOOLS = {
         "system_info",
         "system_status",
@@ -19,10 +19,14 @@ class ConfirmationManager:
         "search_files",
         "open_file",
         "get_clipboard",
+        "set_clipboard",
+        "validate_project_files",
     }
 
     # Categories requiring explicit user confirmation
     IMPACTFUL_TOOL_CATEGORIES = {
+        "create_project_folder",
+        "create_project_file",
         "create_file",
         "modify_file",
         "delete_file",

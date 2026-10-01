@@ -11,6 +11,11 @@ from app.tools.search_tool import SearchFilesTool
 from app.tools.file_tool import OpenFileTool
 from app.tools.clipboard_tool import GetClipboardTool, SetClipboardTool
 from app.tools.system_info_tool import SystemInfoTool
+from app.tools.project_tool import (
+    CreateProjectFolderTool,
+    CreateProjectFileTool,
+    ValidateProjectFilesTool,
+)
 
 __all__ = [
     "BaseTool",
@@ -25,4 +30,7 @@ __all__ = [
     "GetClipboardTool",
     "SetClipboardTool",
     "SystemInfoTool",
+    "CreateProjectFolderTool",
+    "CreateProjectFileTool",
+    "ValidateProjectFilesTool",
 ]

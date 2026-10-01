@@ -109,7 +109,7 @@ class SafetyGuard:
                 tool_name=tool_name,
             )
 
-        # 4. Known Phase 3 safe tools
+        # 4. Known Phase 3 & Phase 4.1 authorized safe tools
         safe_tools = {
             "time",
             "system_status",
@@ -121,13 +121,16 @@ class SafetyGuard:
             "open_file",
             "get_clipboard",
             "set_clipboard",
+            "create_project_folder",
+            "create_project_file",
+            "validate_project_files",
         }
 
         if tool_name.lower() in safe_tools:
             return PermissionResult(
                 allowed=True,
                 risk_level="safe",
-                reason="Action permitted under Phase 3 controlled laptop intelligence policy.",
+                reason="Action permitted under controlled laptop intelligence policy.",
                 tool_name=tool_name,
             )
 
