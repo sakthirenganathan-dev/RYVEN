@@ -124,6 +124,7 @@ class SafetyGuard:
             "create_project_folder",
             "create_project_file",
             "validate_project_files",
+            "apply_project_modification",   # M8: controlled file modification
         }
 
         if tool_name.lower() in safe_tools:

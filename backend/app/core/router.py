@@ -105,6 +105,17 @@ class IntentRouter:
         re.IGNORECASE,
     )
 
+    # Existing project modification patterns (M8)
+    # Must NOT match new-project creation or plain educational questions.
+    EXISTING_PROJECT_MOD_PATTERNS = [
+        r"\b(?:modify|update|change|refactor|improve|enhance)\s+(?:my\s+|the\s+|an?\s+)?(?:existing\s+)?(?:react|python|fastapi|web|html|node|frontend|vanilla)?\s*project\b",
+        r"\b(?:add|implement|integrate)\s+.+?\s+(?:to|into|in)\s+(?:my\s+|the\s+|an?\s+)?(?:existing\s+)?(?:react|python|fastapi|web|html|node|frontend|vanilla)?\s*project\b",
+        r"\b(?:fix|repair|resolve|debug)\s+.+?\s+(?:in|inside|within)\s+(?:my\s+|the\s+)?(?:existing\s+)?(?:react|python|fastapi|web|html)?\s*project\b",
+        r"\b(?:modify|update|change|improve)\s+(?:my\s+|the\s+)?(?:existing\s+)(?:react|python|fastapi|web|html|node)?\s*(?:app|application|project|site)\b",
+        r"\b(?:add|implement)\s+(?:dark\s+mode|login\s+page|auth(?:entication)?|dashboard|navbar|routing|api\s+endpoint|rest\s+api)\s+(?:to|into)\s+(?:my\s+|the\s+)?(?:existing\s+)?(?:react|python|fastapi|web|html)?\s*(?:app|project|application|site)\b",
+        r"\bopen\s+(?:my\s+)?(?P<modname>[a-zA-Z0-9_\-]+)\s+project\s+and\s+(?:add|modify|update|fix|change)\b",
+    ]
+
     # Multi-step Workflow patterns (Phase 4 & 4.1)
     WORKSPACE_PREP_PATTERNS = [
         r"\b(?:prepare(?:\s+my)?(?:\s+(?:development|dev))?\s+workspace)\b",
@@ -133,6 +144,9 @@ class IntentRouter:
         self._compiled_project_creation = [
             re.compile(p, re.IGNORECASE) for p in self.PROJECT_CREATION_PATTERNS
         ]
+        self._compiled_existing_mod = [
+            re.compile(p, re.IGNORECASE) for p in self.EXISTING_PROJECT_MOD_PATTERNS
+        ]
 
     def _strip_invocation_prefix(self, text: str) -> str:
         """Strip conversational address prefix such as 'RYVEN, ' or 'Jarvis '."""
@@ -145,7 +159,27 @@ class IntentRouter:
         raw_text = message.strip()
         clean_text = self._strip_invocation_prefix(raw_text)
 
-        # 0. Check for Multi-Step Workflows (Phase 4 & 4.1)
+        # 0a. Existing project modification (M8) — checked BEFORE new-project creation
+        for pattern in self._compiled_existing_mod:
+            match = pattern.search(clean_text)
+            if match:
+                g = match.groupdict()
+                project_name_hint = g.get("modname", "")
+                decision = RouteDecision(
+                    intent="workflow",
+                    workflow_name="modify_existing_project",
+                    tool_arguments={
+                        "project_name_hint": project_name_hint,
+                        "user_request": clean_text,
+                    },
+                    reason="Matched existing project modification request",
+                )
+                logger.info(
+                    f"Router decision: workflow='modify_existing_project' for message='{raw_text[:40]}...'"
+                )
+                return decision
+
+        # 0b. Check for Multi-Step Workflows (Phase 4 & 4.1)
         for pattern in self._compiled_workspace_prep:
             if pattern.search(clean_text):
                 decision = RouteDecision(

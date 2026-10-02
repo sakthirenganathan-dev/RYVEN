@@ -25,6 +25,16 @@ class WorkflowPlanner:
         r"\b(?:create|build|scaffold|generate|setup|set\s+up)\s+(?:a\s+)?(?:new\s+)?(?:(?P<type>react|python|web|vanilla|html|node|frontend)\s+)?project\s+['\"]?(?P<name>(?!in\b|using\b|with\b|for\b|from\b)[a-zA-Z0-9_\-]+)['\"]?\b",
     ]
 
+    # Existing project modification patterns (M8)
+    EXISTING_PROJECT_MOD_PATTERNS = [
+        r"\b(?:modify|update|change|refactor|improve|enhance)\s+(?:my\s+|the\s+|an?\s+)?(?:existing\s+)?(?:react|python|fastapi|web|html|node|frontend|vanilla)?\s*project\b",
+        r"\b(?:add|implement|integrate)\s+.+?\s+(?:to|into|in)\s+(?:my\s+|the\s+|an?\s+)?(?:existing\s+)?(?:react|python|fastapi|web|html|node|frontend|vanilla)?\s*project\b",
+        r"\b(?:fix|repair|resolve|debug)\s+.+?\s+(?:in|inside|within)\s+(?:my\s+|the\s+)?(?:existing\s+)?(?:react|python|fastapi|web|html)?\s*project\b",
+        r"\b(?:modify|update|change|improve)\s+(?:my\s+|the\s+)?(?:existing\s+)(?:react|python|fastapi|web|html|node)?\s*(?:app|application|project|site)\b",
+        r"\b(?:add|implement)\s+(?:dark\s+mode|login\s+page|auth(?:entication)?|dashboard|navbar|routing|api\s+endpoint|rest\s+api)\s+(?:to|into)\s+(?:my\s+|the\s+)?(?:existing\s+)?(?:react|python|fastapi|web|html)?\s*(?:app|project|application|site)\b",
+        r"\bopen\s+(?:my\s+)?(?P<modname>[a-zA-Z0-9_\-]+)\s+project\s+and\s+(?:add|modify|update|fix|change)\b",
+    ]
+
     def __init__(self, registry: Optional[ToolRegistry] = None) -> None:
         if registry is None:
             from app.tools.registry import create_default_registry
@@ -37,6 +47,9 @@ class WorkflowPlanner:
         self._compiled_project_creation = [
             re.compile(p, re.IGNORECASE) for p in self.PROJECT_CREATION_PATTERNS
         ]
+        self._compiled_existing_mod = [
+            re.compile(p, re.IGNORECASE) for p in self.EXISTING_PROJECT_MOD_PATTERNS
+        ]
 
     def can_plan(self, query: str) -> bool:
         """Check if query matches a recognized high-level workflow."""
@@ -45,7 +58,10 @@ class WorkflowPlanner:
         clean = re.sub(r"^(?:ryven|jarvis)[,\s:]+", "", clean, flags=re.IGNORECASE).strip()
         if any(pattern.search(clean) for pattern in self._compiled_workspace_prep):
             return True
+        if any(pattern.search(clean) for pattern in self._compiled_existing_mod):
+            return True
         return any(pattern.search(clean) for pattern in self._compiled_project_creation)
+
 
     def plan_workspace_preparation(self, query: str = "", requested_by: str = "user") -> Optional[WorkflowDefinition]:
         """Generate the Workspace Preparation Workflow plan using approved Phase 3 tools."""
@@ -271,6 +287,103 @@ class WorkflowPlanner:
         logger.info(f"Planned DEV ENGINE project workflow '{workflow.name}' with {len(steps)} steps.")
         return workflow
 
+    def plan_existing_project_modification(
+        self,
+        query: str,
+        project_name_hint: str = "",
+        requested_by: str = "user",
+    ) -> Optional[WorkflowDefinition]:
+        """Generate the Existing Project Modification Workflow (M8).
+
+        This workflow:
+          Step 1: Resolve project path (via ProjectResolver)
+          Step 2: Scan project structure (via ProjectScanner)
+          Step 3: Analyze request and build modification plan (planning only)
+          Step 4: Wait for user confirmation (ConfirmationManager handles this)
+          Step 5: Apply validated modifications (ApplyProjectModificationTool)
+          Step 6: Validate result + build check + quality gate
+
+        Note: Steps 3-5 use a special meta-tool 'analyze_and_plan_modification'
+        that is handled inline in WorkflowExecutor for the M8 workflow, because
+        the plan itself is data-driven and cannot be fully declared upfront.
+        """
+        from app.tools.project_tool import sanitize_project_name
+
+        # Sanitize hint if provided
+        hint = project_name_hint.strip() if project_name_hint else ""
+        if hint:
+            hint = sanitize_project_name(hint) or ""
+
+        # Build steps for the M8 modification workflow
+        steps: List[WorkflowStep] = [
+            WorkflowStep(
+                name="Resolve Existing Project",
+                tool_name="resolve_existing_project",
+                arguments={
+                    "project_name_hint": hint,
+                    "user_request": query,
+                },
+                requires_confirmation=False,
+            ),
+            WorkflowStep(
+                name="Scan Project Structure",
+                tool_name="scan_existing_project",
+                arguments={
+                    "user_request": query,
+                },
+                requires_confirmation=False,
+            ),
+            WorkflowStep(
+                name="Analyze Request and Plan Modifications",
+                tool_name="plan_project_modifications",
+                arguments={
+                    "user_request": query,
+                },
+                requires_confirmation=False,
+            ),
+            WorkflowStep(
+                name="Apply Validated Modifications",
+                tool_name="apply_project_modification",
+                arguments={
+                    "confirmed": True,
+                    "objective": query,
+                },
+                requires_confirmation=True,
+            ),
+            WorkflowStep(
+                name="Validate Modified Project",
+                tool_name="validate_project_files",
+                arguments={},
+                requires_confirmation=False,
+            ),
+        ]
+
+        # Verify critical tools exist
+        required_tools = {"apply_project_modification", "validate_project_files"}
+        for tool_name in required_tools:
+            if not self.registry.has(tool_name):
+                logger.error(
+                    f"Cannot plan M8 modification workflow: required tool '{tool_name}' not registered."
+                )
+                return None
+
+        workflow = WorkflowDefinition(
+            name=f"Modify Existing Project: {hint or 'detected project'}",
+            description=f"Safely analyze, plan, confirm, and apply modifications to an existing project. "
+                        f"Request: {query[:120]}",
+            requested_by=requested_by,
+            steps=steps,
+            metadata={
+                "workflow_type": "existing_project_modification",
+                "project_name_hint": hint,
+                "user_request": query,
+            },
+        )
+        logger.info(
+            f"Planned M8 modification workflow '{workflow.name}' with {len(steps)} steps."
+        )
+        return workflow
+
     def plan(self, query: str, requested_by: str = "user") -> Optional[WorkflowDefinition]:
         """Convert a user request into a supported workflow plan, if recognized."""
         clean = query.strip()
@@ -279,6 +392,13 @@ class WorkflowPlanner:
         # 1. Workspace prep check
         if any(pattern.search(clean) for pattern in self._compiled_workspace_prep):
             return self.plan_workspace_preparation(clean, requested_by=requested_by)
+
+        # 1b. M8 Existing project modification check (before new-project creation)
+        if any(pattern.search(clean) for pattern in self._compiled_existing_mod):
+            return self.plan_existing_project_modification(
+                query=clean,
+                requested_by=requested_by,
+            )
 
         # Check for explicit dev engine / rich features request
         is_rich_dev_request = any(

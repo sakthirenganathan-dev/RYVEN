@@ -63,6 +63,7 @@ def create_default_registry() -> ToolRegistry:
         CreateProjectFileTool,
         ValidateProjectFilesTool,
     )
+    from app.tools.modification_tool import ApplyProjectModificationTool
 
     registry = ToolRegistry()
     registry.register(TimeTool())
@@ -78,4 +79,5 @@ def create_default_registry() -> ToolRegistry:
     registry.register(CreateProjectFolderTool())
     registry.register(CreateProjectFileTool())
     registry.register(ValidateProjectFilesTool())
+    registry.register(ApplyProjectModificationTool())
     return registry

@@ -66,6 +66,7 @@ class WorkflowDefinition(BaseModel):
     completed_at: Optional[str] = None
     error: Optional[str] = None
     final_result: Optional[str] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)  # M8: workflow-type context
 
     @property
     def total_steps(self) -> int:

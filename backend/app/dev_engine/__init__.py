@@ -32,6 +32,25 @@ from app.dev_engine.dev_loop import DevelopmentLoopManager, DevelopmentLoopResul
 from app.dev_engine.quality_gate import QualityGate, QualityGateResult
 from app.dev_engine.git_engine import GitEngine, GitResult
 
+# ── M8 exports (Existing Project Modification Engine) ────────────────────────
+from app.dev_engine.m8_models import (
+    ExistingProjectModel,
+    ModificationRequest,
+    ModificationPlan,
+    FilePatch,
+    PatchOperation,
+    RollbackRecord,
+    RollbackEntry,
+    ModificationResult,
+    ModificationStatus,
+    RiskLevel as M8RiskLevel,
+)
+from app.dev_engine.m8_resolver import ProjectResolver, ResolvedProject
+from app.dev_engine.m8_scanner import ProjectScanner
+from app.dev_engine.m8_planner import DiffEngine, ModificationPlanner
+from app.dev_engine.m8_validator import ModificationValidator
+from app.dev_engine.m8_apply import ApplyEngine, RollbackEngine
+
 __all__ = [
     # v1
     "ProjectType", "ProjectSpecification", "FilePlanItem", "FilePlan",
@@ -48,4 +67,13 @@ __all__ = [
     "DevelopmentLoopManager", "DevelopmentLoopResult",
     "QualityGate", "QualityGateResult",
     "GitEngine", "GitResult",
+    # M8
+    "ExistingProjectModel", "ModificationRequest", "ModificationPlan",
+    "FilePatch", "PatchOperation", "RollbackRecord", "RollbackEntry",
+    "ModificationResult", "ModificationStatus", "M8RiskLevel",
+    "ProjectResolver", "ResolvedProject",
+    "ProjectScanner",
+    "DiffEngine", "ModificationPlanner",
+    "ModificationValidator",
+    "ApplyEngine", "RollbackEngine",
 ]
