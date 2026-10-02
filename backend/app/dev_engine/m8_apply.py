@@ -101,10 +101,10 @@ class ApplyEngine:
                         duration_ms=(time.monotonic() - start) * 1000,
                     )
 
-                # Capture pre-modification state
-                entry = self._capture_rollback_entry(plan.project_name, patch)
-                if entry:
-                    rollback_record.entries.append(entry)
+            # Capture pre-modification state (for rollback)
+            entry = self._capture_rollback_entry(plan.project_name, patch)
+            if entry:
+                rollback_record.entries.append(entry)
 
             # Write the file
             change = self._write_patch(plan.project_name, patch)

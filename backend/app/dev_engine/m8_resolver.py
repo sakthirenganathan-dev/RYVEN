@@ -34,6 +34,7 @@ _BLOCKED_PATH_PATTERNS = [
     re.compile(r"\.\.[/\\]", re.IGNORECASE),       # Windows traversal
     re.compile(r"^[A-Za-z]:\\", re.IGNORECASE),    # Absolute Windows drive path
     re.compile(r"^/", re.IGNORECASE),              # Absolute Unix path
+    re.compile(r"^[/\\]{2}", re.IGNORECASE),       # UNC network share path (e.g. \\server\share)
 ]
 
 _BLOCKED_SYSTEM_PATHS = [

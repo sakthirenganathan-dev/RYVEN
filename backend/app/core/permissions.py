@@ -26,6 +26,7 @@ class SafetyGuard:
         # Arbitrary shell execution
         r"\b(?:cmd(?:\.exe)?|powershell(?:\.exe)?|bash|sh|zsh|wscript|cscript)\b",
         r"\b(?:powershell(?:\.exe)?\s+-(?:command|c|encodedcommand))\b",
+        r"\b(?:use\s+shell|run\s+shell|execute\s+shell|shell\s+command|run\s+cmd)\b",
         r"\b(?:run\s+python|execute\s+python|python(?:\.exe)?\s+-[ce]|python\s+[^\s]+\.py)\b",
         # Dangerous discovery and process tools
         r"\b(?:whoami|ipconfig|netstat|taskkill|vssadmin|bcdedit)\b",
@@ -37,6 +38,12 @@ class SafetyGuard:
         r"\b(?:registry\s+modification|reg(?:\.exe)?\s+(?:add|delete|import|export))\b",
         r"\b(?:firewall\s+modification|netsh(?:\.exe)?\s+advfirewall)\b",
         r"\b(?:service\s+modification|sc(?:\.exe)?\s+(?:create|delete|config|stop|start))\b",
+        # Destructive Git and force push patterns
+        r"\b(?:git\s+reset\s+--hard|git\s+clean\s+-[a-z]*[fdx]|git\s+branch\s+-[a-z]*D|git\s+checkout\s+--\s+\.)\b",
+        r"\b(?:git\s+push\s+.*(?:--force|-f\b|--force-with-lease|--force-if-includes))\b",
+        r"\b(?:force\s+push|push\s+--force)\b",
+        r"\b(?:delete\s+(?:the\s+)?branch|branch\s+deletion|clean\s+(?:all\s+)?untracked\s+files|git\s+clean)\b",
+        r"\b(?:execute\s+arbitrary\s+(?:git\s+)?command|arbitrary\s+(?:git\s+)?command)\b",
         # Unsafe protocol schemes
         r"(?:file://|javascript:|data:|vbscript:)",
         # Path traversal
@@ -125,7 +132,51 @@ class SafetyGuard:
             "create_project_file",
             "validate_project_files",
             "apply_project_modification",   # M8: controlled file modification
+            "resolve_existing_project",     # M8.5: project resolution
+            "scan_existing_project",        # M8.5: project scanning
+            "plan_project_modifications",   # M8.5: modification planner
+            "validate_modification_plan",   # M8.5: pre-write validation
+            "build_project",                # M8.5: sandbox build
+            "test_project",                 # M8.5: sandbox test
+            "quality_gate",                 # M8.5: quality gate check
+            # M11 Git tools
+            "git_status",
+            "git_diff",
+            "git_branch",
+            "git_remote",
+            "git_log",
+            "git_stage",
+            "git_unstage",
+            "git_commit",
+            "git_push",
+            # M12 Deployment tools
+            "deployment_detect",
+            "deployment_preflight",
+            "deployment_preview",
+            "deployment_deploy",
+            "deployment_status",
+            "deployment_verify",
+            # M11.5 Knowledge Graph tools
+            "graph_status",
+            "graph_build",
+            "graph_update",
+            "graph_query",
+            "graph_find_symbol",
+            "graph_find_dependencies",
+            "graph_find_dependents",
+            "graph_find_callers",
+            "graph_explain",
+            "graph_path",
+            # M13 Health & Verification tools
+            "health_check",
+            "health_status",
+            "health_history",
+            "health_monitor_start",
+            "health_monitor_stop",
         }
+
+
+
 
         if tool_name.lower() in safe_tools:
             return PermissionResult(

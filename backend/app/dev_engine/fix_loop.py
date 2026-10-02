@@ -36,10 +36,11 @@ class FixLoopManager:
             logger.warning(f"Security Alert: Target fix path '{error.file_path}' escapes project '{project_name}'.")
             return None
 
+        etype = getattr(error, "error_type", getattr(error, "category", "BUILD_ERROR"))
         proposal = FixProposal(
             fix_id=f"fix-{uuid.uuid4().hex[:8]}",
             target_file=error.file_path,
-            description=f"Resolve {error.error_type}: {error.message}",
+            description=f"Resolve {etype}: {error.message}",
             proposed_content=corrected_content,
             requires_confirmation=True,
         )

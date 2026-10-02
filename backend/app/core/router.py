@@ -105,16 +105,35 @@ class IntentRouter:
         re.IGNORECASE,
     )
 
-    # Existing project modification patterns (M8)
+    # Existing project modification patterns (M8 / M8.5)
     # Must NOT match new-project creation or plain educational questions.
     EXISTING_PROJECT_MOD_PATTERNS = [
-        r"\b(?:modify|update|change|refactor|improve|enhance)\s+(?:my\s+|the\s+|an?\s+)?(?:existing\s+)?(?:react|python|fastapi|web|html|node|frontend|vanilla)?\s*project\b",
-        r"\b(?:add|implement|integrate)\s+.+?\s+(?:to|into|in)\s+(?:my\s+|the\s+|an?\s+)?(?:existing\s+)?(?:react|python|fastapi|web|html|node|frontend|vanilla)?\s*project\b",
-        r"\b(?:fix|repair|resolve|debug)\s+.+?\s+(?:in|inside|within)\s+(?:my\s+|the\s+)?(?:existing\s+)?(?:react|python|fastapi|web|html)?\s*project\b",
+        r"\b(?:modify|update|change|refactor|improve|enhance)\s+(?:my\s+|the\s+|an?\s+)?(?:existing\s+)?(?:react|python|fastapi|web|html|node|frontend|vanilla\s+)?(?P<modname>[a-zA-Z0-9_\-]+)?\s*project\b",
+        r"\b(?:add|implement|integrate)\s+.+?\s+(?:to|into|in)\s+(?:my\s+|the\s+|an?\s+)?(?:existing\s+)?(?:[a-zA-Z0-9_\-]+\s+)?(?:app|project|application|site)\b",
+        r"\b(?:fix|repair|resolve|debug)\s+.+?\s+(?:in|inside|within)\s+(?:my\s+|the\s+)?(?:existing\s+)?(?:[a-zA-Z0-9_\-]+\s+)?(?:app|project|application|site)\b",
         r"\b(?:modify|update|change|improve)\s+(?:my\s+|the\s+)?(?:existing\s+)(?:react|python|fastapi|web|html|node)?\s*(?:app|application|project|site)\b",
         r"\b(?:add|implement)\s+(?:dark\s+mode|login\s+page|auth(?:entication)?|dashboard|navbar|routing|api\s+endpoint|rest\s+api)\s+(?:to|into)\s+(?:my\s+|the\s+)?(?:existing\s+)?(?:react|python|fastapi|web|html)?\s*(?:app|project|application|site)\b",
         r"\bopen\s+(?:my\s+)?(?P<modname>[a-zA-Z0-9_\-]+)\s+project\s+and\s+(?:add|modify|update|fix|change)\b",
+        r"\b(?:change|update|fix|improve)\s+(?:the\s+)?(?:navbar|header|footer|sidebar|theme|login|ui|design)\b",
+        r"\b(?:fix\s+(?:the\s+)?build\s+errors?)\b",
+        r"\b(?:improve|update)\s+(?:the\s+)?(?:existing\s+)?(?:project\s+)?ui\b",
     ]
+
+    # Educational query patterns — must route to AI, never workflow or Git/deployment tools
+    EDUCATIONAL_PATTERNS = [
+        r"^(?:what\s+is\s+(?:react|vite|python|fastapi|html|css|javascript|typescript|auth|authentication|docker|git|node|tailwind|deployment|vercel|render|railway)\b)",
+        r"^(?:what\s+is\s+git\s+(?:commit|push|branch|status|diff|rebase|merge|remote|pull)\b)",
+        r"^(?:what\s+are\s+(?:react|vite|components|props|hooks|states|git\s+branches)\b)",
+        r"^(?:how\s+does\s+(?:vite|react|auth|authentication|git|node|fastapi|deployment|vercel|render|railway)\s+work\b)",
+        r"^(?:how\s+does\s+git\s+(?:commit|push|branch|merge|rebase)\s+work\b)",
+        r"^(?:explain\s+(?:authentication|auth|react|vite|routing|docker|git|fastapi|deployment|vercel|render|railway)\b)",
+        r"^(?:explain\s+git\s+(?:commit|push|branch|status|diff|rebase|merge)\b)",
+        r"^(?:what\s+is\s+(?:an?\s+)?(?:http\s+)?health\s+check\b)",
+        r"^(?:what\s+is\s+(?:an?\s+)?(?:deployment\s+)?verification\b)",
+        r"^(?:how\s+does\s+(?:a\s+)?(?:health\s+check|deployment\s+verification|http\s+probe)\s+work\b)",
+        r"^(?:explain\s+(?:health\s+checks?|deployment\s+verification|http\s+probes?)\b)",
+    ]
+
 
     # Multi-step Workflow patterns (Phase 4 & 4.1)
     WORKSPACE_PREP_PATTERNS = [
@@ -147,6 +166,9 @@ class IntentRouter:
         self._compiled_existing_mod = [
             re.compile(p, re.IGNORECASE) for p in self.EXISTING_PROJECT_MOD_PATTERNS
         ]
+        self._compiled_educational = [
+            re.compile(p, re.IGNORECASE) for p in self.EDUCATIONAL_PATTERNS
+        ]
 
     def _strip_invocation_prefix(self, text: str) -> str:
         """Strip conversational address prefix such as 'RYVEN, ' or 'Jarvis '."""
@@ -159,12 +181,22 @@ class IntentRouter:
         raw_text = message.strip()
         clean_text = self._strip_invocation_prefix(raw_text)
 
-        # 0a. Existing project modification (M8) — checked BEFORE new-project creation
+        # Educational queries (e.g. "What is React?", "Explain authentication", "How does Vite work?")
+        # Must always route to AI, never triggering modification or creation workflows.
+        for pattern in self._compiled_educational:
+            if pattern.search(clean_text):
+                logger.info(f"Router decision: ai (educational query) for '{raw_text[:40]}...'")
+                return RouteDecision(
+                    intent="ai",
+                    reason="Educational query routed to AI provider",
+                )
+
+        # 0a. Existing project modification (M8 / M8.5) — checked BEFORE new-project creation
         for pattern in self._compiled_existing_mod:
             match = pattern.search(clean_text)
             if match:
                 g = match.groupdict()
-                project_name_hint = g.get("modname", "")
+                project_name_hint = g.get("modname", "") or ""
                 decision = RouteDecision(
                     intent="workflow",
                     workflow_name="modify_existing_project",
@@ -336,12 +368,292 @@ class IntentRouter:
                 logger.info(f"Router decision: tool='system_info' for message='{raw_text[:40]}...'")
                 return decision
 
+        # 10b. Git Operations (Milestone 11)
+        p_name = self._extract_git_project(clean_text)
+
+        # Commit
+        if re.search(r"\b(?:commit\s+(?:these\s+|the\s+|my\s+)?changes|create\s+(?:a\s+)?commit|make\s+(?:a\s+)?commit|git\s+commit)\b", clean_text, re.IGNORECASE):
+            msg = self._extract_commit_message(clean_text)
+            decision = RouteDecision(
+                intent="tool",
+                tool_name="git_commit",
+                tool_arguments={"project_name": p_name, "message": msg, "confirmed": False},
+                reason="Matched Git commit request",
+            )
+            logger.info(f"Router decision: tool='git_commit' for message='{raw_text[:40]}...'")
+            return decision
+
+        # Push
+        if re.search(r"\b(?:push\s+(?:this\s+project|my\s+changes|these\s+changes|the\s+project|to\s+github|to\s+remote|to\s+origin)|git\s+push)\b", clean_text, re.IGNORECASE):
+            remote = "origin"
+            m_rem = re.search(r"\bto\s+(origin|upstream|[a-zA-Z0-9_\-]+)\b", clean_text, re.IGNORECASE)
+            if m_rem and m_rem.group(1).lower() not in ("github", "the", "my", "remote"):
+                remote = m_rem.group(1)
+            decision = RouteDecision(
+                intent="tool",
+                tool_name="git_push",
+                tool_arguments={"project_name": p_name, "remote": remote, "confirmed": False},
+                reason="Matched Git push request",
+            )
+            logger.info(f"Router decision: tool='git_push' for message='{raw_text[:40]}...'")
+            return decision
+
+        # Diff / What changed
+        if re.search(r"\b(?:show\s+(?:me\s+)?what\s+changed|what\s+changed|show\s+git\s+diff|git\s+diff|show\s+(?:the\s+)?diff)\b", clean_text, re.IGNORECASE):
+            decision = RouteDecision(
+                intent="tool",
+                tool_name="git_diff",
+                tool_arguments={"project_name": p_name},
+                reason="Matched Git diff request",
+            )
+            logger.info(f"Router decision: tool='git_diff' for message='{raw_text[:40]}...'")
+            return decision
+
+        # Branch
+        if re.search(r"\b(?:what\s+branch\s+am\s+i\s+on|show\s+(?:my\s+)?branch(?:es)?|show\s+git\s+branch(?:es)?|git\s+branch)\b", clean_text, re.IGNORECASE):
+            decision = RouteDecision(
+                intent="tool",
+                tool_name="git_branch",
+                tool_arguments={"project_name": p_name},
+                reason="Matched Git branch request",
+            )
+            logger.info(f"Router decision: tool='git_branch' for message='{raw_text[:40]}...'")
+            return decision
+
+        # Remote
+        if re.search(r"\b(?:show\s+(?:my\s+)?(?:git\s+)?remotes?|git\s+remote)\b", clean_text, re.IGNORECASE):
+            decision = RouteDecision(
+                intent="tool",
+                tool_name="git_remote",
+                tool_arguments={"project_name": p_name},
+                reason="Matched Git remote request",
+            )
+            logger.info(f"Router decision: tool='git_remote' for message='{raw_text[:40]}...'")
+            return decision
+
+        # Log
+        if re.search(r"\b(?:show\s+(?:my\s+)?(?:git\s+)?commits|show\s+git\s+log|git\s+log|recent\s+commits)\b", clean_text, re.IGNORECASE):
+            decision = RouteDecision(
+                intent="tool",
+                tool_name="git_log",
+                tool_arguments={"project_name": p_name},
+                reason="Matched Git log request",
+            )
+            logger.info(f"Router decision: tool='git_log' for message='{raw_text[:40]}...'")
+            return decision
+
+        # Stage
+        if re.search(r"\b(?:stage\s+(?:these\s+|the\s+)?files?|stage\s+changes|git\s+add|git\s+stage)\b", clean_text, re.IGNORECASE):
+            decision = RouteDecision(
+                intent="tool",
+                tool_name="git_stage",
+                tool_arguments={"project_name": p_name, "files": []},
+                reason="Matched Git stage request",
+            )
+            logger.info(f"Router decision: tool='git_stage' for message='{raw_text[:40]}...'")
+            return decision
+
+        # Unstage
+        if re.search(r"\b(?:unstage\s+(?:these\s+|the\s+)?files?|unstage\s+changes|git\s+unstage|git\s+restore\s+--staged)\b", clean_text, re.IGNORECASE):
+            decision = RouteDecision(
+                intent="tool",
+                tool_name="git_unstage",
+                tool_arguments={"project_name": p_name},
+                reason="Matched Git unstage request",
+            )
+            logger.info(f"Router decision: tool='git_unstage' for message='{raw_text[:40]}...'")
+            return decision
+
+        # Status
+        if re.search(r"\b(?:check\s+(?:my\s+)?(?:project\s+)?git\s+status|git\s+status|check\s+git|what(?:\s+is|\s*'?s)?\s+(?:the\s+)?git\s+status)\b", clean_text, re.IGNORECASE):
+            decision = RouteDecision(
+                intent="tool",
+                tool_name="git_status",
+                tool_arguments={"project_name": p_name},
+                reason="Matched Git status request",
+            )
+            logger.info(f"Router decision: tool='git_status' for message='{raw_text[:40]}...'")
+            return decision
+
+        # 10c. Deployment Operations (Milestone 12)
+        if re.search(r"\b(?:deploy\s+(?:this\s+)?(?:project|app|application)?|publish\s+(?:this\s+)?(?:project|app)?|put\s+this\s+online|ship\s+(?:this|the\s+app|the\s+project))\b", clean_text, re.IGNORECASE):
+            provider = "VERCEL"
+            if "railway" in clean_text.lower():
+                provider = "RAILWAY"
+            elif "render" in clean_text.lower():
+                provider = "RENDER"
+            decision = RouteDecision(
+                intent="workflow",
+                workflow_name="deployment",
+                tool_arguments={"project_name": p_name, "provider": provider},
+                reason="Matched project deployment request",
+            )
+            logger.info(f"Router decision: workflow='deployment' for message='{raw_text[:40]}...'")
+            return decision
+
+        # Deployment preflight direct tool
+        if re.search(r"\b(?:run\s+(?:deployment\s+)?preflight|check\s+deployment\s+preflight|deployment\s+preflight)\b", clean_text, re.IGNORECASE):
+            decision = RouteDecision(
+                intent="tool",
+                tool_name="deployment_preflight",
+                tool_arguments={"project_name": p_name},
+                reason="Matched deployment preflight check request",
+            )
+            logger.info(f"Router decision: tool='deployment_preflight' for message='{raw_text[:40]}...'")
+            return decision
+
+        # Deployment detect direct tool
+        if re.search(r"\b(?:detect\s+(?:project\s+)?framework|detect\s+deployment|check\s+framework)\b", clean_text, re.IGNORECASE):
+            decision = RouteDecision(
+                intent="tool",
+                tool_name="deployment_detect",
+                tool_arguments={"project_name": p_name},
+                reason="Matched deployment framework detection request",
+            )
+            logger.info(f"Router decision: tool='deployment_detect' for message='{raw_text[:40]}...'")
+            return decision
+
+        # 10d. Knowledge Graph Operations (Milestone 11.5)
+        # Who calls <symbol>?
+        m_callers = re.search(r"\b(?:who\s+calls|what\s+calls|find\s+callers\s+of)\s+([a-zA-Z0-9_\.]+)\b", clean_text, re.IGNORECASE)
+        if m_callers:
+            symbol = m_callers.group(1).strip()
+            return RouteDecision(
+                intent="tool",
+                tool_name="graph_find_callers",
+                tool_arguments={"project_path": p_name or ".", "target": symbol},
+                reason=f"Matched graph caller search for '{symbol}'",
+            )
+
+        # What depends on <symbol>?
+        m_deps_on = re.search(r"\b(?:what\s+depends\s+on|who\s+depends\s+on|find\s+dependents\s+of)\s+([a-zA-Z0-9_\.]+)\b", clean_text, re.IGNORECASE)
+        if m_deps_on:
+            target = m_deps_on.group(1).strip()
+            return RouteDecision(
+                intent="tool",
+                tool_name="graph_find_dependents",
+                tool_arguments={"project_path": p_name or ".", "target": target},
+                reason=f"Matched graph dependents query for '{target}'",
+            )
+
+        # What does <target> depend on?
+        m_deps_of = re.search(r"\b(?:what\s+does\s+([a-zA-Z0-9_\.]+)\s+depend\s+on|dependencies\s+of\s+([a-zA-Z0-9_\.]+))\b", clean_text, re.IGNORECASE)
+        if m_deps_of:
+            target = (m_deps_of.group(1) or m_deps_of.group(2)).strip()
+            return RouteDecision(
+                intent="tool",
+                tool_name="graph_find_dependencies",
+                tool_arguments={"project_path": p_name or ".", "target": target},
+                reason=f"Matched graph dependencies query for '{target}'",
+            )
+
+        # Where is <symbol> defined/handled?
+        m_where = re.search(r"\b(?:where\s+is\s+([a-zA-Z0-9_\.]+)\s+(?:defined|handled|implemented)|locate\s+symbol\s+([a-zA-Z0-9_\.]+))\b", clean_text, re.IGNORECASE)
+        if m_where:
+            symbol = (m_where.group(1) or m_where.group(2)).strip()
+            return RouteDecision(
+                intent="tool",
+                tool_name="graph_find_symbol",
+                tool_arguments={"project_path": p_name or ".", "symbol": symbol},
+                reason=f"Matched graph symbol search for '{symbol}'",
+            )
+
+        # Graph status
+        if re.search(r"\b(?:check\s+(?:the\s+)?(?:knowledge\s+)?graph\s+status|knowledge\s+graph\s+status|is\s+(?:the\s+)?graph\s+(?:ready|stale))\b", clean_text, re.IGNORECASE):
+            return RouteDecision(
+                intent="tool",
+                tool_name="graph_status",
+                tool_arguments={"project_path": p_name or "."},
+                reason="Matched knowledge graph status check request",
+            )
+
+        # Build knowledge graph
+        if re.search(r"\b(?:build\s+(?:the\s+)?knowledge\s+graph|index\s+project\s+(?:structure|graph)|create\s+knowledge\s+graph)\b", clean_text, re.IGNORECASE):
+            return RouteDecision(
+                intent="tool",
+                tool_name="graph_build",
+                tool_arguments={"project_path": p_name or ".", "force": False},
+                reason="Matched knowledge graph build request",
+            )
+
+        # 10e. Health & Verification Operations (Milestone 13)
+        m_health_url = re.search(r"https?://[^\s'\"]+", clean_text)
+        target_health_url = m_health_url.group(0) if m_health_url else ""
+
+        # Show health history
+        if re.search(r"\b(?:show\s+(?:deployment\s+)?health\s+history|health\s+history|deployment\s+health\s+history)\b", clean_text, re.IGNORECASE):
+            return RouteDecision(
+                intent="tool",
+                tool_name="health_history",
+                tool_arguments={"url": target_health_url},
+                reason="Matched health check history request",
+            )
+
+        # Stop monitoring
+        if re.search(r"\b(?:stop\s+(?:health\s+)?(?:monitoring|monitor)|cancel\s+(?:health\s+)?(?:monitoring|monitor))\b", clean_text, re.IGNORECASE):
+            return RouteDecision(
+                intent="tool",
+                tool_name="health_monitor_stop",
+                tool_arguments={"url": target_health_url},
+                reason="Matched health monitor stop request",
+            )
+
+        # Start monitoring
+        if re.search(r"\b(?:monitor\s+(?:my\s+)?(?:deployment|endpoint|site|app)|start\s+(?:continuous\s+)?(?:health\s+)?monitor(?:ing)?)\b", clean_text, re.IGNORECASE):
+            return RouteDecision(
+                intent="tool",
+                tool_name="health_monitor_start",
+                tool_arguments={"url": target_health_url},
+                reason="Matched health monitoring request",
+            )
+
+        # Deployment verification
+        if re.search(r"\b(?:is\s+(?:my\s+)?deployed\s+(?:app|site|project)\s+working|check\s+(?:my\s+)?deployment|verify\s+(?:the\s+)?deployment|verify\s+(?:my\s+)?deployed\s+app)\b", clean_text, re.IGNORECASE):
+            return RouteDecision(
+                intent="tool",
+                tool_name="deployment_verify",
+                tool_arguments={"project_name": p_name, "url": target_health_url},
+                reason="Matched deployment verification request",
+            )
+
+        # Health check / status / latency
+        if re.search(r"\b(?:is\s+(?:the\s+)?(?:site|endpoint|app|deployment)\s+healthy|check\s+(?:the\s+)?(?:endpoint\s+)?health|health\s+check|how\s+fast\s+is\s+(?:my\s+)?(?:deployment|site|app|endpoint)\s+responding|ping\s+(?:the\s+)?(?:deployment|endpoint|site))\b", clean_text, re.IGNORECASE):
+            return RouteDecision(
+                intent="tool",
+                tool_name="health_check",
+                tool_arguments={"url": target_health_url},
+                reason="Matched endpoint health check request",
+            )
+
         # 11. Default: Route to AI Provider
+
         decision = RouteDecision(
             intent="ai",
             tool_name=None,
             tool_arguments={},
             reason="General knowledge or conversational query delegated to AI engine",
         )
+
         logger.info(f"Router decision: AI engine for message='{raw_text[:40]}...'")
         return decision
+
+    @staticmethod
+    def _extract_git_project(text: str) -> str:
+        """Extract project name from a Git query if specified."""
+        m = re.search(r"\b(?:in|for|of|project)\s+['\"]?([a-zA-Z0-9_\-]+)['\"]?\b", text, re.IGNORECASE)
+        if m:
+            candidate = m.group(1).strip()
+            if candidate.lower() not in ("git", "github", "the", "my", "this", "these", "project"):
+                return candidate
+        return ""
+
+    @staticmethod
+    def _extract_commit_message(text: str) -> str:
+        """Extract commit message if enclosed in quotes or after a keyword."""
+        m = re.search(r"""(?:message|with\s+message|-m)\s*[:=]?\s*['"]([^'"]+)['"]""", text, re.IGNORECASE)
+        if m:
+            return m.group(1).strip()
+        m2 = re.search(r""":\s*['"]([^'"]+)['"]""", text)
+        if m2:
+            return m2.group(1).strip()
+        return "Update project files"

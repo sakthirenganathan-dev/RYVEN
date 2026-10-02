@@ -33,6 +33,7 @@ from app.tools.project_tool import resolve_project_path
 
 class TestRequest(BaseModel):
     """Controlled specification for a test run."""
+    __test__ = False
 
     project_name: str
     project_type: str
@@ -43,6 +44,7 @@ class TestRequest(BaseModel):
 
 class TestResult(BaseModel):
     """Structured outcome of a test run."""
+    __test__ = False
 
     success: bool
     project_name: str
@@ -71,6 +73,7 @@ _PYTEST_SUMMARY_RE = re.compile(
 
 class TestEngine:
     """Runs project tests inside the SandboxProcessRunner."""
+    __test__ = False
 
     def __init__(self, policy: Optional[SandboxPolicy] = None) -> None:
         self.policy = policy or SandboxPolicy()

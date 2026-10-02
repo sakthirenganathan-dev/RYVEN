@@ -43,6 +43,12 @@ class WorkflowExecutor:
         logger.info(f"Starting workflow execution: '{workflow.name}' (ID: {workflow.workflow_id})")
 
         completed_details: List[Dict[str, Any]] = []
+        context_state: Dict[str, Any] = {}
+        if workflow.metadata:
+            if "project_name" in workflow.metadata:
+                context_state["project_name"] = workflow.metadata["project_name"]
+            if "project_name_hint" in workflow.metadata and workflow.metadata["project_name_hint"]:
+                context_state["project_name"] = workflow.metadata["project_name_hint"]
 
         for idx, step in enumerate(workflow.steps):
             workflow.current_step_index = idx
@@ -86,14 +92,43 @@ class WorkflowExecutor:
                 logger.error(f"Workflow execution failure at step {idx + 1}: {step.error}")
                 break
 
+            # Dynamic argument resolution from previous steps' context
+            exec_args = dict(step.arguments)
+            if context_state.get("project_name"):
+                if not exec_args.get("project_name"):
+                    exec_args["project_name"] = context_state["project_name"]
+                if "project_name_hint" in exec_args and not exec_args["project_name_hint"]:
+                    exec_args["project_name_hint"] = context_state["project_name"]
+            if context_state.get("patches") and "patches" in exec_args and not exec_args["patches"]:
+                exec_args["patches"] = context_state["patches"]
+            if context_state.get("expected_files") and "expected_files" in exec_args and not exec_args["expected_files"]:
+                exec_args["expected_files"] = context_state["expected_files"]
+            if "build_success" in context_state and "build_success" in exec_args and exec_args["build_success"] is None:
+                exec_args["build_success"] = context_state["build_success"]
+            if "test_success" in context_state and "test_success" in exec_args and exec_args["test_success"] is None:
+                exec_args["test_success"] = context_state["test_success"]
+
             try:
-                tool_output = await tool.execute(**step.arguments)
+                tool_output = await tool.execute(**exec_args)
                 step.result = tool_output
                 step.completed_at = utc_now_iso()
 
                 is_success = tool_output.get("success", True)
                 if is_success:
                     step.status = StepState.SUCCESS
+                    # Propagate context
+                    if tool_output.get("project_name"):
+                        context_state["project_name"] = tool_output["project_name"]
+                    if tool_output.get("patches"):
+                        context_state["patches"] = tool_output["patches"]
+                        context_state["expected_files"] = [
+                            p.get("relative_path") for p in tool_output["patches"] if isinstance(p, dict)
+                        ]
+                    if "exit_code" in tool_output:
+                        context_state["build_success"] = tool_output.get("success", False)
+                    if "tests_total" in tool_output:
+                        context_state["test_success"] = tool_output.get("success", False)
+
                     completed_details.append({
                         "step_id": step.step_id,
                         "name": step.name,

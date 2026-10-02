@@ -214,3 +214,49 @@ class ModificationResult(BaseModel):
     warnings: List[str] = Field(default_factory=list)
     git_summary: str = ""
     duration_ms: float = 0.0
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# M8.5 Structured result
+# ─────────────────────────────────────────────────────────────────────────────
+
+class ExistingProjectModificationResult(BaseModel):
+    """Complete structured outcome for M8.5 existing project modification integration."""
+
+    workflow_id: str = Field(default_factory=lambda: f"wf-{uuid.uuid4().hex[:8]}")
+    project_name: str
+    project_path: str = ""
+    status: str = "COMPLETED"
+
+    files_scanned: int = 0
+    files_modified: int = 0
+
+    modification_plan: Optional[Dict[str, Any]] = None
+    validation_result: Optional[Dict[str, Any]] = None
+
+    confirmation_required: bool = True
+    confirmation_status: str = "CONFIRMED"
+
+    apply_result: Optional[Dict[str, Any]] = None
+    rollback_result: Optional[Dict[str, Any]] = None
+
+    build_result: Optional[Dict[str, Any]] = None
+    test_result: Optional[Dict[str, Any]] = None
+
+    error_analysis: Optional[Dict[str, Any]] = None
+    fix_iterations: int = 0
+
+    quality_gate_result: Optional[Dict[str, Any]] = None
+    git_commit_result: Optional[Dict[str, Any]] = None
+    git_summary: str = ""
+    deployment_result: Optional[Dict[str, Any]] = None
+    knowledge_graph_context: Optional[Dict[str, Any]] = None
+
+    started_at: Optional[str] = None
+
+
+    completed_at: Optional[str] = None
+    duration_ms: float = 0.0
+
+    user_message: str = ""
+

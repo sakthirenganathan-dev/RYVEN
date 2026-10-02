@@ -25,3 +25,7 @@ SUPPORTED_PROJECT_TYPES = {
     "python": "Python Application / CLI",
     "python_api": "Python FastAPI Service",
 }
+
+# Maximum iterations in controlled fix loop
+MAX_FIX_ITERATIONS: int = 10
+

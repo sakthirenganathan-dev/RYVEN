@@ -66,8 +66,9 @@ class BuildResult(BaseModel):
 # Engine
 # ─────────────────────────────────────────────────────────────────────────────
 
-_NPM_TYPES = {"react_ts", "react", "vanilla_web", "web"}
+_NPM_TYPES = {"react_ts", "react_js", "react", "vanilla_web", "web"}
 _PYTHON_TYPES = {"python_app", "python_api", "python"}
+
 
 
 class BuildEngine:

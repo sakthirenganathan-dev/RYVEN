@@ -40,12 +40,17 @@ export function DeveloperHUD() {
           </div>
         ))}
         <div
-          className="grid grid-cols-3 gap-2 border-t border-border/60 pt-2 text-[10px] text-muted-foreground"
+          className="grid grid-cols-2 gap-2 border-t border-border/60 pt-2 text-[10px] text-muted-foreground"
           style={{ fontFamily: "var(--font-mono)" }}
         >
           <span>GIT · CLEAN</span>
-          <span>TESTS · 128/128</span>
           <span>DEPLOY · EDGE</span>
+          <span className="text-holo">GRAPH · INDEXED</span>
+          <span className="text-holo">CTX · OPTIMIZED</span>
+          <span className="text-signal col-span-2 flex items-center justify-between">
+            <span>HEALTH · HEALTHY</span>
+            <span>48 MS</span>
+          </span>
         </div>
       </div>
     </HUDPanel>

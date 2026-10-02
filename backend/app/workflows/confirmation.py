@@ -21,7 +21,38 @@ class ConfirmationManager:
         "get_clipboard",
         "set_clipboard",
         "validate_project_files",
+        "git_status",
+        "git_diff",
+        "git_branch",
+        "git_remote",
+        "git_log",
+        "git_stage",
+        "git_unstage",
+        "deployment_detect",
+        "deployment_preflight",
+        "deployment_preview",
+        "deployment_status",
+        "deployment_verify",
+        # M11.5 Knowledge Graph tools
+        "graph_status",
+        "graph_build",
+        "graph_update",
+        "graph_query",
+        "graph_find_symbol",
+        "graph_find_dependencies",
+        "graph_find_dependents",
+        "graph_find_callers",
+        "graph_explain",
+        "graph_path",
+        # M13 Health & Verification tools
+        "health_check",
+        "health_status",
+        "health_history",
+        "health_monitor_start",
+        "health_monitor_stop",
     }
+
+
 
     # Categories requiring explicit user confirmation
     IMPACTFUL_TOOL_CATEGORIES = {
@@ -31,9 +62,12 @@ class ConfirmationManager:
         "modify_file",
         "delete_file",
         "git_commit",
+        "git_push",
         "package_install",
         "deploy",
+        "deployment_deploy",
     }
+
 
     def requires_confirmation(self, step: WorkflowStep) -> bool:
         """Determine whether a step must pause for user confirmation before executing."""

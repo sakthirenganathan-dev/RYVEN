@@ -63,7 +63,28 @@ def create_default_registry() -> ToolRegistry:
         CreateProjectFileTool,
         ValidateProjectFilesTool,
     )
-    from app.tools.modification_tool import ApplyProjectModificationTool
+    from app.tools.modification_tool import (
+        ApplyProjectModificationTool,
+        BuildProjectTool,
+        PlanProjectModificationsTool,
+        QualityGateTool,
+        ResolveExistingProjectTool,
+        ScanExistingProjectTool,
+        TestProjectTool,
+        ValidateModificationPlanTool,
+    )
+
+    from app.tools.git_tool import (
+        GitBranchTool,
+        GitCommitTool,
+        GitDiffTool,
+        GitLogTool,
+        GitPushTool,
+        GitRemoteTool,
+        GitStageTool,
+        GitStatusTool,
+        GitUnstageTool,
+    )
 
     registry = ToolRegistry()
     registry.register(TimeTool())
@@ -80,4 +101,75 @@ def create_default_registry() -> ToolRegistry:
     registry.register(CreateProjectFileTool())
     registry.register(ValidateProjectFilesTool())
     registry.register(ApplyProjectModificationTool())
+    registry.register(ResolveExistingProjectTool())
+    registry.register(ScanExistingProjectTool())
+    registry.register(PlanProjectModificationsTool())
+    registry.register(ValidateModificationPlanTool())
+    registry.register(BuildProjectTool())
+    registry.register(TestProjectTool())
+    registry.register(QualityGateTool())
+    # M11 Git Tools
+    registry.register(GitStatusTool())
+    registry.register(GitDiffTool())
+    registry.register(GitBranchTool())
+    registry.register(GitRemoteTool())
+    registry.register(GitLogTool())
+    registry.register(GitStageTool())
+    registry.register(GitUnstageTool())
+    registry.register(GitCommitTool())
+    registry.register(GitPushTool())
+    # M12 Deployment Tools
+    from app.tools.deployment_tool import (
+        DeploymentDeployTool,
+        DeploymentDetectTool,
+        DeploymentPreflightTool,
+        DeploymentPreviewTool,
+        DeploymentStatusTool,
+        DeploymentVerifyTool,
+    )
+    registry.register(DeploymentDetectTool())
+    registry.register(DeploymentPreflightTool())
+    registry.register(DeploymentPreviewTool())
+    registry.register(DeploymentDeployTool())
+    registry.register(DeploymentStatusTool())
+    registry.register(DeploymentVerifyTool())
+    # M11.5 Knowledge Graph Tools
+    from app.tools.knowledge_graph_tool import (
+        GraphBuildTool,
+        GraphExplainTool,
+        GraphFindCallersTool,
+        GraphFindDependenciesTool,
+        GraphFindDependentsTool,
+        GraphFindSymbolTool,
+        GraphPathTool,
+        GraphQueryTool,
+        GraphStatusTool,
+        GraphUpdateTool,
+    )
+    registry.register(GraphStatusTool())
+    registry.register(GraphBuildTool())
+    registry.register(GraphUpdateTool())
+    registry.register(GraphQueryTool())
+    registry.register(GraphFindSymbolTool())
+    registry.register(GraphFindDependenciesTool())
+    registry.register(GraphFindDependentsTool())
+    registry.register(GraphFindCallersTool())
+    registry.register(GraphExplainTool())
+    registry.register(GraphPathTool())
+    # M13 Health & Verification Tools
+    from app.health.health_tool import (
+        HealthCheckTool,
+        HealthStatusTool,
+        HealthHistoryTool,
+        HealthMonitorStartTool,
+        HealthMonitorStopTool,
+    )
+    registry.register(HealthCheckTool())
+    registry.register(HealthStatusTool())
+    registry.register(HealthHistoryTool())
+    registry.register(HealthMonitorStartTool())
+    registry.register(HealthMonitorStopTool())
     return registry
+
+
+

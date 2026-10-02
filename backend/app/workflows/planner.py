@@ -25,15 +25,26 @@ class WorkflowPlanner:
         r"\b(?:create|build|scaffold|generate|setup|set\s+up)\s+(?:a\s+)?(?:new\s+)?(?:(?P<type>react|python|web|vanilla|html|node|frontend)\s+)?project\s+['\"]?(?P<name>(?!in\b|using\b|with\b|for\b|from\b)[a-zA-Z0-9_\-]+)['\"]?\b",
     ]
 
-    # Existing project modification patterns (M8)
+    # Existing project modification patterns (M8 / M8.5)
     EXISTING_PROJECT_MOD_PATTERNS = [
-        r"\b(?:modify|update|change|refactor|improve|enhance)\s+(?:my\s+|the\s+|an?\s+)?(?:existing\s+)?(?:react|python|fastapi|web|html|node|frontend|vanilla)?\s*project\b",
-        r"\b(?:add|implement|integrate)\s+.+?\s+(?:to|into|in)\s+(?:my\s+|the\s+|an?\s+)?(?:existing\s+)?(?:react|python|fastapi|web|html|node|frontend|vanilla)?\s*project\b",
-        r"\b(?:fix|repair|resolve|debug)\s+.+?\s+(?:in|inside|within)\s+(?:my\s+|the\s+)?(?:existing\s+)?(?:react|python|fastapi|web|html)?\s*project\b",
+        r"\b(?:modify|update|change|refactor|improve|enhance)\s+(?:my\s+|the\s+|an?\s+)?(?:existing\s+)?(?:react|python|fastapi|web|html|node|frontend|vanilla\s+)?(?P<modname>[a-zA-Z0-9_\-]+)?\s*project\b",
+        r"\b(?:add|implement|integrate)\s+.+?\s+(?:to|into|in)\s+(?:my\s+|the\s+|an?\s+)?(?:existing\s+)?(?:[a-zA-Z0-9_\-]+\s+)?(?:app|project|application|site)\b",
+        r"\b(?:fix|repair|resolve|debug)\s+.+?\s+(?:in|inside|within)\s+(?:my\s+|the\s+)?(?:existing\s+)?(?:[a-zA-Z0-9_\-]+\s+)?(?:app|project|application|site)\b",
         r"\b(?:modify|update|change|improve)\s+(?:my\s+|the\s+)?(?:existing\s+)(?:react|python|fastapi|web|html|node)?\s*(?:app|application|project|site)\b",
         r"\b(?:add|implement)\s+(?:dark\s+mode|login\s+page|auth(?:entication)?|dashboard|navbar|routing|api\s+endpoint|rest\s+api)\s+(?:to|into)\s+(?:my\s+|the\s+)?(?:existing\s+)?(?:react|python|fastapi|web|html)?\s*(?:app|project|application|site)\b",
         r"\bopen\s+(?:my\s+)?(?P<modname>[a-zA-Z0-9_\-]+)\s+project\s+and\s+(?:add|modify|update|fix|change)\b",
+        r"\b(?:change|update|fix|improve)\s+(?:the\s+)?(?:navbar|header|footer|sidebar|theme|login|ui|design)\b",
+        r"\b(?:fix\s+(?:the\s+)?build\s+errors?)\b",
+        r"\b(?:improve|update)\s+(?:the\s+)?(?:existing\s+)?(?:project\s+)?ui\b",
     ]
+
+    EDUCATIONAL_PATTERNS = [
+        r"^(?:what\s+is\s+(?:react|vite|python|fastapi|html|css|javascript|typescript|auth|authentication|docker|git|node|tailwind|deployment|vercel|render|railway)\b)",
+        r"^(?:what\s+are\s+(?:react|vite|components|props|hooks|states)\b)",
+        r"^(?:how\s+does\s+(?:vite|react|auth|authentication|git|node|fastapi|deployment|vercel|render|railway)\s+work\b)",
+        r"^(?:explain\s+(?:authentication|auth|react|vite|routing|docker|git|fastapi|deployment|vercel|render|railway)\b)",
+    ]
+
 
     def __init__(self, registry: Optional[ToolRegistry] = None) -> None:
         if registry is None:
@@ -50,12 +61,17 @@ class WorkflowPlanner:
         self._compiled_existing_mod = [
             re.compile(p, re.IGNORECASE) for p in self.EXISTING_PROJECT_MOD_PATTERNS
         ]
+        self._compiled_educational = [
+            re.compile(p, re.IGNORECASE) for p in self.EDUCATIONAL_PATTERNS
+        ]
 
     def can_plan(self, query: str) -> bool:
         """Check if query matches a recognized high-level workflow."""
         clean = query.strip()
-        # Strip conversational prefix
         clean = re.sub(r"^(?:ryven|jarvis)[,\s:]+", "", clean, flags=re.IGNORECASE).strip()
+        # Educational queries must never trigger workflow planning
+        if any(pattern.search(clean) for pattern in self._compiled_educational):
+            return False
         if any(pattern.search(clean) for pattern in self._compiled_workspace_prep):
             return True
         if any(pattern.search(clean) for pattern in self._compiled_existing_mod):
@@ -314,7 +330,7 @@ class WorkflowPlanner:
         if hint:
             hint = sanitize_project_name(hint) or ""
 
-        # Build steps for the M8 modification workflow
+        # Build steps for the M8.5 modification workflow
         steps: List[WorkflowStep] = [
             WorkflowStep(
                 name="Resolve Existing Project",
@@ -329,6 +345,7 @@ class WorkflowPlanner:
                 name="Scan Project Structure",
                 tool_name="scan_existing_project",
                 arguments={
+                    "project_name": hint,
                     "user_request": query,
                 },
                 requires_confirmation=False,
@@ -337,7 +354,17 @@ class WorkflowPlanner:
                 name="Analyze Request and Plan Modifications",
                 tool_name="plan_project_modifications",
                 arguments={
+                    "project_name": hint,
                     "user_request": query,
+                },
+                requires_confirmation=False,
+            ),
+            WorkflowStep(
+                name="Validate Modification Plan",
+                tool_name="validate_modification_plan",
+                arguments={
+                    "project_name": hint,
+                    "patches": [],
                 },
                 requires_confirmation=False,
             ),
@@ -345,25 +372,66 @@ class WorkflowPlanner:
                 name="Apply Validated Modifications",
                 tool_name="apply_project_modification",
                 arguments={
+                    "project_name": hint,
                     "confirmed": True,
                     "objective": query,
+                    "patches": [],
                 },
                 requires_confirmation=True,
             ),
             WorkflowStep(
                 name="Validate Modified Project",
                 tool_name="validate_project_files",
-                arguments={},
+                arguments={
+                    "project_name": hint,
+                    "expected_files": [],
+                },
+                requires_confirmation=False,
+            ),
+            WorkflowStep(
+                name="Build Modified Project",
+                tool_name="build_project",
+                arguments={
+                    "project_name": hint,
+                    "confirmed": True,
+                },
+                requires_confirmation=False,
+            ),
+            WorkflowStep(
+                name="Run Project Tests",
+                tool_name="test_project",
+                arguments={
+                    "project_name": hint,
+                    "confirmed": True,
+                },
+                requires_confirmation=False,
+            ),
+            WorkflowStep(
+                name="Quality Gate Evaluation",
+                tool_name="quality_gate",
+                arguments={
+                    "project_name": hint,
+                },
                 requires_confirmation=False,
             ),
         ]
 
         # Verify critical tools exist
-        required_tools = {"apply_project_modification", "validate_project_files"}
+        required_tools = {
+            "resolve_existing_project",
+            "scan_existing_project",
+            "plan_project_modifications",
+            "validate_modification_plan",
+            "apply_project_modification",
+            "validate_project_files",
+            "build_project",
+            "test_project",
+            "quality_gate",
+        }
         for tool_name in required_tools:
             if not self.registry.has(tool_name):
                 logger.error(
-                    f"Cannot plan M8 modification workflow: required tool '{tool_name}' not registered."
+                    f"Cannot plan M8.5 modification workflow: required tool '{tool_name}' not registered."
                 )
                 return None
 
@@ -384,21 +452,214 @@ class WorkflowPlanner:
         )
         return workflow
 
+    def plan_git_commit_workflow(
+        self,
+        query: str,
+        project_hint: str = "",
+        message: str = "Update project files",
+        requested_by: str = "user",
+    ) -> Optional[WorkflowDefinition]:
+        """Produce a validated Git commit workflow."""
+        steps = [
+            WorkflowStep(
+                name="Resolve Project Repository",
+                tool_name="resolve_existing_project",
+                arguments={"project_name_hint": project_hint},
+                requires_confirmation=False,
+            ),
+            WorkflowStep(
+                name="Inspect Repository Status",
+                tool_name="git_status",
+                arguments={"project_name": project_hint},
+                requires_confirmation=False,
+            ),
+            WorkflowStep(
+                name="Inspect Working Tree Diff",
+                tool_name="git_diff",
+                arguments={"project_name": project_hint},
+                requires_confirmation=False,
+            ),
+            WorkflowStep(
+                name="Confirm and Create Commit",
+                tool_name="git_commit",
+                arguments={
+                    "project_name": project_hint,
+                    "message": message,
+                    "confirmed": True,
+                },
+                requires_confirmation=True,
+            ),
+        ]
+
+        return WorkflowDefinition(
+            name=f"Git Commit: {project_hint or 'project'}",
+            description=f"Inspect status and diff, confirm commit preview, and create Git commit: {message}",
+            requested_by=requested_by,
+            steps=steps,
+            metadata={"workflow_type": "git_commit", "project_name": project_hint},
+        )
+
+    def plan_git_push_workflow(
+        self,
+        query: str,
+        project_hint: str = "",
+        remote: str = "origin",
+        requested_by: str = "user",
+    ) -> Optional[WorkflowDefinition]:
+        """Produce a validated Git push workflow."""
+        steps = [
+            WorkflowStep(
+                name="Resolve Project Repository",
+                tool_name="resolve_existing_project",
+                arguments={"project_name_hint": project_hint},
+                requires_confirmation=False,
+            ),
+            WorkflowStep(
+                name="Inspect Repository Status",
+                tool_name="git_status",
+                arguments={"project_name": project_hint},
+                requires_confirmation=False,
+            ),
+            WorkflowStep(
+                name="Inspect Branches and Upstream",
+                tool_name="git_branch",
+                arguments={"project_name": project_hint},
+                requires_confirmation=False,
+            ),
+            WorkflowStep(
+                name="Confirm and Push Commits",
+                tool_name="git_push",
+                arguments={
+                    "project_name": project_hint,
+                    "remote": remote,
+                    "confirmed": True,
+                },
+                requires_confirmation=True,
+            ),
+        ]
+
+        return WorkflowDefinition(
+            name=f"Git Push: {project_hint or 'project'}",
+            description=f"Inspect branch state and push commits to remote '{remote}' with explicit confirmation.",
+            requested_by=requested_by,
+            steps=steps,
+            metadata={"workflow_type": "git_push", "project_name": project_hint, "remote": remote},
+        )
+
+    def plan_deployment_workflow(
+        self,
+        query: str,
+        project_hint: str = "",
+        provider: str = "VERCEL",
+        requested_by: str = "user",
+    ) -> WorkflowDefinition:
+        """Create a multi-step deployment workflow with Quality Gate check and explicit confirmation."""
+        steps = [
+            WorkflowStep(
+                name="Resolve Project Location",
+                tool_name="resolve_existing_project",
+                arguments={"project_name_hint": project_hint},
+                requires_confirmation=False,
+            ),
+            WorkflowStep(
+                name="Detect Project Framework",
+                tool_name="deployment_detect",
+                arguments={"project_name": project_hint},
+                requires_confirmation=False,
+            ),
+            WorkflowStep(
+                name="Run Preflight Checks",
+                tool_name="deployment_preflight",
+                arguments={"project_name": project_hint, "provider": provider},
+                requires_confirmation=False,
+            ),
+            WorkflowStep(
+                name="Inspect Git Status",
+                tool_name="git_status",
+                arguments={"project_name": project_hint},
+                requires_confirmation=False,
+            ),
+            WorkflowStep(
+                name="Verify Quality Gate",
+                tool_name="quality_gate",
+                arguments={"project_name": project_hint, "expected_files": []},
+                requires_confirmation=False,
+            ),
+            WorkflowStep(
+                name="Generate Deployment Preview",
+                tool_name="deployment_preview",
+                arguments={"project_name": project_hint, "provider": provider},
+                requires_confirmation=False,
+            ),
+            WorkflowStep(
+                name="Confirm and Execute Deployment",
+                tool_name="deployment_deploy",
+                arguments={
+                    "project_name": project_hint,
+                    "provider": provider,
+                    "confirmed": True,
+                },
+                requires_confirmation=True,
+            ),
+            WorkflowStep(
+                name="Verify Live Deployment",
+                tool_name="deployment_verify",
+                arguments={"url": ""},
+                requires_confirmation=False,
+            ),
+        ]
+
+        return WorkflowDefinition(
+            name=f"Deploy: {project_hint or 'project'}",
+            description=f"Validate, preview, and deploy '{project_hint}' to {provider} with explicit confirmation.",
+            requested_by=requested_by,
+            steps=steps,
+            metadata={"workflow_type": "deployment", "project_name": project_hint, "provider": provider},
+        )
+
     def plan(self, query: str, requested_by: str = "user") -> Optional[WorkflowDefinition]:
         """Convert a user request into a supported workflow plan, if recognized."""
         clean = query.strip()
         clean = re.sub(r"^(?:ryven|jarvis)[,\s:]+", "", clean, flags=re.IGNORECASE).strip()
 
+        # 0. Check for educational queries — must never produce workflows
+        if any(re.search(p, clean, re.IGNORECASE) for p in self.EDUCATIONAL_PATTERNS):
+            return None
+
         # 1. Workspace prep check
         if any(pattern.search(clean) for pattern in self._compiled_workspace_prep):
             return self.plan_workspace_preparation(clean, requested_by=requested_by)
 
-        # 1b. M8 Existing project modification check (before new-project creation)
+        # 1b. Git Commit and Push workflows (Milestone 11)
+        if re.search(r"\b(?:commit\s+(?:these\s+|the\s+|my\s+)?changes|create\s+(?:a\s+)?commit|git\s+commit)\b", clean, re.IGNORECASE):
+            from app.core.router import IntentRouter
+            p_name = IntentRouter._extract_git_project(clean)
+            msg = IntentRouter._extract_commit_message(clean)
+            return self.plan_git_commit_workflow(clean, project_hint=p_name, message=msg, requested_by=requested_by)
+
+        if re.search(r"\b(?:push\s+(?:this\s+project|my\s+changes|these\s+changes|the\s+project|to\s+github|to\s+remote|to\s+origin)|git\s+push)\b", clean, re.IGNORECASE):
+            from app.core.router import IntentRouter
+            p_name = IntentRouter._extract_git_project(clean)
+            return self.plan_git_push_workflow(clean, project_hint=p_name, requested_by=requested_by)
+
+        # 1c. Deployment workflows (Milestone 12)
+        if re.search(r"\b(?:deploy\s+(?:this\s+)?(?:project|app|application)?|publish\s+(?:this\s+)?(?:project|app)?|put\s+this\s+online|ship\s+(?:this|the\s+app|the\s+project))\b", clean, re.IGNORECASE):
+            from app.core.router import IntentRouter
+            p_name = IntentRouter._extract_git_project(clean)
+            provider = "VERCEL"
+            if "railway" in clean.lower():
+                provider = "RAILWAY"
+            elif "render" in clean.lower():
+                provider = "RENDER"
+            return self.plan_deployment_workflow(clean, project_hint=p_name, provider=provider, requested_by=requested_by)
+
+        # 1d. M8 Existing project modification check (before new-project creation)
         if any(pattern.search(clean) for pattern in self._compiled_existing_mod):
             return self.plan_existing_project_modification(
                 query=clean,
                 requested_by=requested_by,
             )
+
 
         # Check for explicit dev engine / rich features request
         is_rich_dev_request = any(
