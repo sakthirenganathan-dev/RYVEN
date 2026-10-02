@@ -50,9 +50,29 @@ class ConfirmationManager:
         "health_history",
         "health_monitor_start",
         "health_monitor_stop",
+        # M14 Autonomous Development Orchestrator tools
+        "orchestrate_task",
+        "get_orchestration_status",
+        "confirm_orchestration",
+        "pause_orchestration",
+        "resume_orchestration",
+        "cancel_orchestration",
+        # M14.3 Controlled Computer & Browser Control tools
+        "open_browser",
+        "navigate_browser",
+        "get_current_page",
+        "read_page",
+        "find_element",
+        "click_element",
+        "type_text",
+        "press_key",
+        "scroll_page",
+        "go_back",
+        "go_forward",
+        "refresh_page",
+        "take_browser_snapshot",
+        "close_browser",
     }
-
-
 
     # Categories requiring explicit user confirmation
     IMPACTFUL_TOOL_CATEGORIES = {
@@ -66,6 +86,9 @@ class ConfirmationManager:
         "package_install",
         "deploy",
         "deployment_deploy",
+        "browser_submit_form",
+        "browser_download",
+        "browser_delete",
     }
 
 

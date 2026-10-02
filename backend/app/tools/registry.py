@@ -1,5 +1,6 @@
 """Safe tool registry for RYVEN."""
 
+import time
 from typing import Any, Dict, List, Optional
 from app.core.logging_config import logger
 from app.tools.base import BaseTool
@@ -45,6 +46,55 @@ class ToolRegistry:
     def get_tool_schemas(self) -> List[Dict[str, Any]]:
         """Return metadata for all registered tools."""
         return [tool.get_info() for tool in self._tools.values()]
+
+    async def execute_tool(
+        self,
+        name: str,
+        arguments: Optional[Dict[str, Any]] = None,
+        task_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Execute a registered tool by name with M14.2 action event emission.
+
+        This wraps BaseTool.execute() with ActionTracker lifecycle events.
+        Tool arguments, return values, and error behaviour are completely unchanged.
+        If action event publishing fails, execution continues unaffected.
+        """
+        tool = self.get(name)
+        if not tool:
+            raise KeyError(f"Tool '{name}' is not registered in ToolRegistry")
+
+        kwargs = arguments or {}
+        # Lazy import to avoid circular imports at module load time
+        from app.actions.action_tracker import action_tracker
+
+        action_id = await action_tracker.tool_started(
+            tool_name=tool.name,
+            arguments=kwargs,
+            task_id=task_id,
+        )
+
+        t0 = time.monotonic()
+        try:
+            result: Dict[str, Any] = await tool.execute(**kwargs)
+            duration_ms = (time.monotonic() - t0) * 1000
+            await action_tracker.tool_completed(
+                tool_name=tool.name,
+                action_id=action_id,
+                result_summary={"success": result.get("success", True)},
+                duration_ms=duration_ms,
+                task_id=task_id,
+            )
+            return result
+        except Exception as exc:
+            duration_ms = (time.monotonic() - t0) * 1000
+            await action_tracker.tool_failed(
+                tool_name=tool.name,
+                action_id=action_id,
+                error=str(exc),
+                duration_ms=duration_ms,
+                task_id=task_id,
+            )
+            raise
 
 
 def create_default_registry() -> ToolRegistry:
@@ -169,7 +219,54 @@ def create_default_registry() -> ToolRegistry:
     registry.register(HealthHistoryTool())
     registry.register(HealthMonitorStartTool())
     registry.register(HealthMonitorStopTool())
+    # M14 Autonomous Development Orchestrator Tools
+    from app.orchestrator.tools import (
+        OrchestrateTaskTool,
+        GetOrchestrationStatusTool,
+        ConfirmOrchestrationTool,
+        PauseOrchestrationTool,
+        ResumeOrchestrationTool,
+        CancelOrchestrationTool,
+    )
+    registry.register(OrchestrateTaskTool())
+    registry.register(GetOrchestrationStatusTool())
+    registry.register(ConfirmOrchestrationTool())
+    registry.register(PauseOrchestrationTool())
+    registry.register(ResumeOrchestrationTool())
+    registry.register(CancelOrchestrationTool())
+    # M14.3 Controlled Computer & Browser Control Tools
+    from app.browser.tools import (
+        OpenBrowserTool,
+        NavigateBrowserTool,
+        GetCurrentPageTool,
+        ReadPageTool,
+        FindElementTool,
+        ClickElementTool,
+        TypeTextTool,
+        PressKeyTool,
+        ScrollPageTool,
+        GoBackTool,
+        GoForwardTool,
+        RefreshPageTool,
+        TakeBrowserSnapshotTool,
+        CloseBrowserTool,
+    )
+    registry.register(OpenBrowserTool())
+    registry.register(NavigateBrowserTool())
+    registry.register(GetCurrentPageTool())
+    registry.register(ReadPageTool())
+    registry.register(FindElementTool())
+    registry.register(ClickElementTool())
+    registry.register(TypeTextTool())
+    registry.register(PressKeyTool())
+    registry.register(ScrollPageTool())
+    registry.register(GoBackTool())
+    registry.register(GoForwardTool())
+    registry.register(RefreshPageTool())
+    registry.register(TakeBrowserSnapshotTool())
+    registry.register(CloseBrowserTool())
     return registry
+
 
 
 

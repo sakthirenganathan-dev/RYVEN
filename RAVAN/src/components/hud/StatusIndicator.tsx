@@ -7,7 +7,7 @@ export function StatusIndicator({
   className,
 }: {
   label: string;
-  tone?: "holo" | "signal" | "violet" | "muted";
+  tone?: "holo" | "signal" | "violet" | "muted" | "alert";
   pulse?: boolean;
   className?: string;
 }) {
@@ -16,6 +16,7 @@ export function StatusIndicator({
     signal: "bg-signal",
     violet: "bg-violet",
     muted: "bg-muted-foreground",
+    alert: "bg-destructive",
   } as const;
   return (
     <span className={cn("inline-flex items-center gap-2", className)}>

@@ -108,6 +108,14 @@ class OpenApplicationTool(BaseTool):
                 ),
             ],
         },
+        "explorer": {
+            "display_name": "File Explorer",
+            "aliases": ["explorer", "file explorer", "files", "my computer"],
+            "candidates": [
+                lambda: os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "explorer.exe"),
+                lambda: "explorer.exe",
+            ],
+        },
     }
 
     def _resolve_application_key(self, query: str) -> Optional[str]:

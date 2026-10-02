@@ -113,6 +113,12 @@ __all__ = [
     "HealthHistoryTool",
     "HealthMonitorStartTool",
     "HealthMonitorStopTool",
+    "OrchestrateTaskTool",
+    "GetOrchestrationStatusTool",
+    "ConfirmOrchestrationTool",
+    "PauseOrchestrationTool",
+    "ResumeOrchestrationTool",
+    "CancelOrchestrationTool",
 ]
 
 
@@ -126,6 +132,16 @@ def __getattr__(name: str):
     ):
         import app.health.health_tool as ht
         return getattr(ht, name)
+    if name in (
+        "OrchestrateTaskTool",
+        "GetOrchestrationStatusTool",
+        "ConfirmOrchestrationTool",
+        "PauseOrchestrationTool",
+        "ResumeOrchestrationTool",
+        "CancelOrchestrationTool",
+    ):
+        import app.orchestrator.tools as ot
+        return getattr(ot, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 

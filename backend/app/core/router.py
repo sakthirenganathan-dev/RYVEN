@@ -55,7 +55,7 @@ class IntentRouter:
 
     # Approved applications regex
     APP_PATTERN = re.compile(
-        r"\b(?:open|launch|start|run)\s+(?:the\s+)?(vs\s+code|vscode|visual\s+studio\s+code|code|chrome|google\s+chrome|browser|notepad|calculator|calc|windows\s+terminal|terminal|wt)\b",
+        r"\b(?:open|launch|start|run)\s+(?:the\s+)?(vs\s+code|vscode|visual\s+studio\s+code|code|chrome|google\s+chrome|browser|notepad|calculator|calc|windows\s+terminal|terminal|wt|file\s+explorer|explorer)\b",
         re.IGNORECASE,
     )
 
@@ -105,6 +105,24 @@ class IntentRouter:
         re.IGNORECASE,
     )
 
+    # M14.3 Controlled Browser Automation Patterns
+    BROWSER_NAVIGATE_PATTERN = re.compile(
+        r"\b(?:navigate\s+(?:the\s+)?browser|browse)\s+(?:to\s+)?(https?://[^\s]+|[a-zA-Z0-9\.\-]+\.[a-zA-Z]{2,}[^\s]*)\b",
+        re.IGNORECASE,
+    )
+    BROWSER_READ_PATTERN = re.compile(
+        r"\b(?:read|extract|get)\s+(?:the\s+)?(?:visible\s+)?(?:page\s+content|web\s*page|current\s+page)\b",
+        re.IGNORECASE,
+    )
+    BROWSER_SNAPSHOT_PATTERN = re.compile(
+        r"\b(?:take\s+)?(?:a\s+)?browser\s+snapshot\b",
+        re.IGNORECASE,
+    )
+    BROWSER_CLOSE_PATTERN = re.compile(
+        r"\b(?:close|quit)\s+(?:the\s+)?browser\b",
+        re.IGNORECASE,
+    )
+
     # Existing project modification patterns (M8 / M8.5)
     # Must NOT match new-project creation or plain educational questions.
     EXISTING_PROJECT_MOD_PATTERNS = [
@@ -132,8 +150,30 @@ class IntentRouter:
         r"^(?:what\s+is\s+(?:an?\s+)?(?:deployment\s+)?verification\b)",
         r"^(?:how\s+does\s+(?:a\s+)?(?:health\s+check|deployment\s+verification|http\s+probe)\s+work\b)",
         r"^(?:explain\s+(?:health\s+checks?|deployment\s+verification|http\s+probes?)\b)",
+        r"^(?:what\s+is\s+(?:an?\s+)?(?:autonomous\s+)?(?:development\s+)?orchestrat(?:or|ion)\b)",
+        r"^(?:how\s+does\s+(?:the\s+)?(?:autonomous\s+)?orchestrat(?:or|ion)\s+work\b)",
+        r"^(?:explain\s+(?:the\s+)?(?:autonomous\s+)?orchestrat(?:or|ion)\b)",
     ]
 
+    # M14 Orchestration Patterns
+    ORCHESTRATION_COMPOSITE_PATTERNS = [
+        # Explicit orchestrate keyword
+        r"\b(?:orchestrate|run\s+orchestrat(?:or|ion)|autonomous(?:ly)?\s+dev(?:elop)?)\b",
+        # Full chain: add/modify/change/refactor/fix ... and commit/push/deploy/ship
+        r"\b(?:add|implement|modify|update|change|refactor|fix)\b.+?\b(?:and\s+)?(?:commit|push|deploy|ship)\b",
+        # Build/test ... and commit/push/deploy/ship
+        r"\b(?:build|test)\b.+?\b(?:and\s+)?(?:commit|push|deploy|ship)\b",
+        # "test it, commit it, deploy it"
+        r"\b(?:test\s+it,\s*commit\s+it,\s*deploy\s+it)\b",
+    ]
+
+    ORCHESTRATION_CONTROL_PATTERNS = [
+        (r"\b(?:pause\s+(?:the\s+)?orchestrat(?:or|ion)|pause\s+task)\b", "pause_orchestration"),
+        (r"\b(?:resume\s+(?:the\s+)?orchestrat(?:or|ion)|resume\s+task)\b", "resume_orchestration"),
+        (r"\b(?:cancel\s+(?:the\s+)?orchestrat(?:or|ion)|cancel\s+orchestrated\s+task|abort\s+orchestrat(?:or|ion))\b", "cancel_orchestration"),
+        (r"\b(?:confirm\s+(?:the\s+)?orchestrat(?:or|ion)|confirm\s+orchestrated\s+step|approve\s+orchestrat(?:or|ion))\b", "confirm_orchestration"),
+        (r"\b(?:(?:check|get|show)\s+(?:the\s+)?orchestrat(?:or|ion)\s+status|orchestrat(?:or|ion)\s+status)\b", "get_orchestration_status"),
+    ]
 
     # Multi-step Workflow patterns (Phase 4 & 4.1)
     WORKSPACE_PREP_PATTERNS = [
@@ -169,6 +209,12 @@ class IntentRouter:
         self._compiled_educational = [
             re.compile(p, re.IGNORECASE) for p in self.EDUCATIONAL_PATTERNS
         ]
+        self._compiled_orchestration_composite = [
+            re.compile(p, re.IGNORECASE) for p in self.ORCHESTRATION_COMPOSITE_PATTERNS
+        ]
+        self._compiled_orchestration_control = [
+            (re.compile(p, re.IGNORECASE), tool) for p, tool in self.ORCHESTRATION_CONTROL_PATTERNS
+        ]
 
     def _strip_invocation_prefix(self, text: str) -> str:
         """Strip conversational address prefix such as 'RYVEN, ' or 'Jarvis '."""
@@ -190,6 +236,41 @@ class IntentRouter:
                     intent="ai",
                     reason="Educational query routed to AI provider",
                 )
+
+        # 0. Autonomous Development Orchestrator (M14)
+        # 0.1 Direct orchestration controls (pause, resume, cancel, confirm, status)
+        for pattern, tool_name in self._compiled_orchestration_control:
+            if pattern.search(clean_text):
+                m_task = re.search(r"\b(?:task(?:_id)?|id)[:=\s]+([a-zA-Z0-9_\-]+)\b", clean_text, re.IGNORECASE)
+                task_id = m_task.group(1).strip() if m_task else ""
+                args = {"task_id": task_id}
+                if tool_name == "confirm_orchestration":
+                    args["confirmed"] = not bool(re.search(r"\b(?:reject|deny|cancel)\b", clean_text, re.IGNORECASE))
+                decision = RouteDecision(
+                    intent="tool",
+                    tool_name=tool_name,
+                    tool_arguments=args,
+                    reason=f"Matched orchestration control request for '{tool_name}'",
+                )
+                logger.info(f"Router decision: tool='{tool_name}' for message='{raw_text[:40]}...'")
+                return decision
+
+        # 0.2 Composite multi-stage development goal (checked BEFORE single-stage modification)
+        for pattern in self._compiled_orchestration_composite:
+            if pattern.search(clean_text):
+                p_name = self._extract_git_project(clean_text)
+                decision = RouteDecision(
+                    intent="tool",
+                    tool_name="orchestrate_task",
+                    tool_arguments={
+                        "goal": clean_text,
+                        "project_name": p_name,
+                        "project_path": "",
+                    },
+                    reason="Matched autonomous development orchestration request",
+                )
+                logger.info(f"Router decision: tool='orchestrate_task' for message='{raw_text[:40]}...'")
+                return decision
 
         # 0a. Existing project modification (M8 / M8.5) — checked BEFORE new-project creation
         for pattern in self._compiled_existing_mod:
@@ -330,6 +411,49 @@ class IntentRouter:
                 reason=f"Matched approved website request: '{dest_url}'",
             )
             logger.info(f"Router decision: tool='open_website' url='{dest_url}'")
+            return decision
+
+        # 7.5 M14.3 Controlled Browser Automation Routing
+        b_nav = self.BROWSER_NAVIGATE_PATTERN.search(clean_text)
+        if b_nav:
+            target_url = b_nav.group(1).strip()
+            decision = RouteDecision(
+                intent="tool",
+                tool_name="navigate_browser",
+                tool_arguments={"url": target_url},
+                reason=f"Matched controlled browser navigation to '{target_url}'",
+            )
+            logger.info(f"Router decision: tool='navigate_browser' url='{target_url}'")
+            return decision
+
+        if self.BROWSER_READ_PATTERN.search(clean_text):
+            decision = RouteDecision(
+                intent="tool",
+                tool_name="read_page",
+                tool_arguments={},
+                reason="Matched controlled browser read page request",
+            )
+            logger.info("Router decision: tool='read_page'")
+            return decision
+
+        if self.BROWSER_SNAPSHOT_PATTERN.search(clean_text):
+            decision = RouteDecision(
+                intent="tool",
+                tool_name="take_browser_snapshot",
+                tool_arguments={},
+                reason="Matched controlled browser snapshot request",
+            )
+            logger.info("Router decision: tool='take_browser_snapshot'")
+            return decision
+
+        if self.BROWSER_CLOSE_PATTERN.search(clean_text):
+            decision = RouteDecision(
+                intent="tool",
+                tool_name="close_browser",
+                tool_arguments={},
+                reason="Matched controlled browser close request",
+            )
+            logger.info("Router decision: tool='close_browser'")
             return decision
 
         # 8. Check for time queries
@@ -639,11 +763,11 @@ class IntentRouter:
 
     @staticmethod
     def _extract_git_project(text: str) -> str:
-        """Extract project name from a Git query if specified."""
-        m = re.search(r"\b(?:in|for|of|project)\s+['\"]?([a-zA-Z0-9_\-]+)['\"]?\b", text, re.IGNORECASE)
+        """Extract project name from a Git or orchestration query if specified."""
+        m = re.search(r"\b(?:in|for|of|to|project)\s+(?:my\s+|the\s+)?['\"]?([a-zA-Z0-9_\-]+)['\"]?\b", text, re.IGNORECASE)
         if m:
             candidate = m.group(1).strip()
-            if candidate.lower() not in ("git", "github", "the", "my", "this", "these", "project"):
+            if candidate.lower() not in ("git", "github", "the", "my", "this", "these", "project", "an", "a"):
                 return candidate
         return ""
 

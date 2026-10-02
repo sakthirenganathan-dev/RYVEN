@@ -156,7 +156,10 @@ class Assistant:
             if tool:
                 logger.info(f"Executing registered tool: '{tool.name}' with args {decision.tool_arguments}")
                 try:
-                    tool_output = await tool.execute(**decision.tool_arguments)
+                    tool_output = await self.registry.execute_tool(
+                        name=tool.name,
+                        arguments=decision.tool_arguments,
+                    )
                     display_message = tool_output.get(
                         "message", f"Tool {tool.name} executed successfully."
                     )

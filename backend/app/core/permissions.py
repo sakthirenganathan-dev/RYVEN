@@ -41,7 +41,7 @@ class SafetyGuard:
         # Destructive Git and force push patterns
         r"\b(?:git\s+reset\s+--hard|git\s+clean\s+-[a-z]*[fdx]|git\s+branch\s+-[a-z]*D|git\s+checkout\s+--\s+\.)\b",
         r"\b(?:git\s+push\s+.*(?:--force|-f\b|--force-with-lease|--force-if-includes))\b",
-        r"\b(?:force\s+push|push\s+--force)\b",
+        r"\b(?:force\s+push|push\s+(?:with\s+)?--force|--force|-f\b)\b",
         r"\b(?:delete\s+(?:the\s+)?branch|branch\s+deletion|clean\s+(?:all\s+)?untracked\s+files|git\s+clean)\b",
         r"\b(?:execute\s+arbitrary\s+(?:git\s+)?command|arbitrary\s+(?:git\s+)?command)\b",
         # Unsafe protocol schemes
@@ -173,6 +173,28 @@ class SafetyGuard:
             "health_history",
             "health_monitor_start",
             "health_monitor_stop",
+            # M14 Autonomous Development Orchestrator tools
+            "orchestrate_task",
+            "get_orchestration_status",
+            "confirm_orchestration",
+            "pause_orchestration",
+            "resume_orchestration",
+            "cancel_orchestration",
+            # M14.3 Controlled Computer & Browser Control tools
+            "open_browser",
+            "navigate_browser",
+            "get_current_page",
+            "read_page",
+            "find_element",
+            "click_element",
+            "type_text",
+            "press_key",
+            "scroll_page",
+            "go_back",
+            "go_forward",
+            "refresh_page",
+            "take_browser_snapshot",
+            "close_browser",
         }
 
 
