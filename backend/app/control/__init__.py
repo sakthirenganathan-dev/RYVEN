@@ -32,6 +32,17 @@ def __getattr__(name: str):
     ):
         import app.control.workflow as wf
         return getattr(wf, name)
+    if name in (
+        "AdaptiveComputerUseController",
+        "adaptive_controller",
+        "ObservedComputerState",
+        "StateDiffClassification",
+        "ActionIdempotency",
+        "AdaptiveExecutionResult",
+        "StateEvaluationResult",
+    ):
+        import app.control.adaptive as adapt
+        return getattr(adapt, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 __all__ = [
@@ -56,4 +67,11 @@ __all__ = [
     "ComputerWorkflowStep",
     "ComputerWorkflowState",
     "ComputerWorkflowResult",
+    "AdaptiveComputerUseController",
+    "adaptive_controller",
+    "ObservedComputerState",
+    "StateDiffClassification",
+    "ActionIdempotency",
+    "AdaptiveExecutionResult",
+    "StateEvaluationResult",
 ]

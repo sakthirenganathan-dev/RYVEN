@@ -207,10 +207,16 @@ class DesktopTargetResolutionResult(BaseModel):
                 data["success"] = data.pop("resolution_success")
             if "target_description" in data and "target" not in data:
                 data["target"] = data.pop("target_description")
+            if "target_found" in data and "success" not in data:
+                data["success"] = data.pop("target_found")
         return data
 
     @property
     def resolution_success(self) -> bool:
+        return self.success
+
+    @property
+    def target_found(self) -> bool:
         return self.success
 
     @property

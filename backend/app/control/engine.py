@@ -541,6 +541,62 @@ class RyvenControlEngine:
             reason=reason,
         )
 
+    @property
+    def adaptive_controller(self) -> Any:
+        if hasattr(self, "_adaptive_controller") and self._adaptive_controller is not None:
+            return self._adaptive_controller
+        from app.control.adaptive import adaptive_controller
+        return adaptive_controller
+
+    @adaptive_controller.setter
+    def adaptive_controller(self, controller: Any) -> None:
+        self._adaptive_controller = controller
+
+    async def execute_adaptive_workflow(
+        self,
+        goal_or_plan: Any,
+        auto_confirm: bool = False,
+        session_id: str = "default",
+        task_id: Optional[str] = None,
+        max_adaptation_cycles: int = 3,
+        max_recovery_attempts: int = 3,
+        timeout_sec: float = 300.0,
+    ) -> Any:
+        """Execute multi-step adaptive computer-use workflow via AdaptiveComputerUseController."""
+        return await self.adaptive_controller.execute_adaptive_workflow(
+            goal_or_plan=goal_or_plan,
+            auto_confirm=auto_confirm,
+            session_id=session_id,
+            task_id=task_id,
+            max_adaptation_cycles=max_adaptation_cycles,
+            max_recovery_attempts=max_recovery_attempts,
+            timeout_sec=timeout_sec,
+        )
+
+    async def cancel_adaptive_workflow(
+        self,
+        workflow_id: str,
+        reason: str = "User requested cancellation",
+    ) -> Any:
+        """Cancel active adaptive computer-use workflow."""
+        return await self.adaptive_controller.cancel_adaptive_workflow(
+            workflow_id=workflow_id,
+            reason=reason,
+        )
+
+    async def confirm_adaptive_workflow(
+        self,
+        workflow_id: str,
+        confirmation_token: Optional[str] = None,
+        approved: bool = True,
+    ) -> Any:
+        """Confirm or reject paused adaptive computer-use workflow."""
+        return await self.adaptive_controller.confirm_adaptive_step(
+            workflow_id=workflow_id,
+            confirmation_token=confirmation_token,
+            approved=approved,
+        )
+
     # Aliases for compatibility
     confirm_action = confirm_control
     cancel_execution = cancel_control
