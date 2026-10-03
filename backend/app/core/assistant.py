@@ -116,69 +116,44 @@ class Assistant:
 
         # 2. Workflow Execution Path (Phase 4 & 4.1)
         if decision.intent == "workflow":
-            if self.agent_engine and hasattr(self.agent_engine, "execute_workflow_goal"):
-                logger.info(f"Executing workflow via AgentEngine for intent: '{decision.workflow_name}'")
-                agent_result = await self.agent_engine.execute_workflow_goal(clean_text)
-                if agent_result:
-                    display_message = agent_result.message
-                    self.context_manager.add_user_message(session_id, clean_text)
-                    self.context_manager.add_assistant_message(session_id, display_message)
-
-                    output_dict = (
-                        agent_result.final_output
-                        if hasattr(agent_result, "final_output") and isinstance(agent_result.final_output, dict)
-                        else {}
-                    )
-                    status_val = (
-                        agent_result.status.value
-                        if hasattr(agent_result.status, "value")
-                        else str(agent_result.status)
-                    )
-                    return ChatResponse(
-                        success=agent_result.success,
-                        type="workflow",
-                        message=display_message,
-                        tool=None,
-                        metadata={
-                            "workflow_id": agent_result.task_id,
-                            "name": decision.workflow_name,
-                            "status": status_val,
-                            "steps_total": agent_result.steps_total,
-                            "steps_completed": agent_result.steps_completed,
-                            "steps_failed": agent_result.steps_failed,
-                            "steps": output_dict.get("steps", []),
-                            **output_dict,
-                        },
-                    )
-
-            logger.info(f"Executing workflow for intent: '{decision.workflow_name}'")
-            wf_result = await self.workflow_engine.run_from_query(
-                clean_text, auto_confirm=auto_confirm
-            )
-            if wf_result:
-                display_message = wf_result.message
-                self.context_manager.add_user_message(session_id, clean_text)
-                self.context_manager.add_assistant_message(session_id, display_message)
-
+            logger.info(f"Routing workflow intent through AgentEngine: '{decision.workflow_name}'")
+            try:
+                agent_result = await self.agent_engine.execute_workflow_goal(
+                    goal=clean_text,
+                    session_id=session_id,
+                )
+            except Exception as exc:
+                logger.error(f"Unified workflow execution failed: {exc}", exc_info=True)
                 return ChatResponse(
-                    success=wf_result.success,
-                    type="workflow",
-                    message=display_message,
+                    success=False,
+                    type="error",
+                    message="RYVEN could not execute the requested workflow safely.",
                     tool=None,
-                    metadata={
-                        "workflow_id": wf_result.workflow_id,
-                        "name": wf_result.name,
-                        "status": wf_result.status.value,
-                        "steps_total": wf_result.steps_total,
-                        "steps_completed": wf_result.steps_completed,
-                        "steps_failed": wf_result.steps_failed,
-                        "steps": wf_result.step_details,
-                        "error": wf_result.error,
-                        **wf_result.metadata,
-                    },
+                    metadata={"error_type": "WORKFLOW_EXECUTION_FAILURE"},
                 )
 
-            logger.warning("Workflow planning returned None. Falling back to AI.")
+            display_message = agent_result.message
+            self.context_manager.add_user_message(session_id, clean_text)
+            self.context_manager.add_assistant_message(session_id, display_message)
+            output_dict = agent_result.final_output
+            return ChatResponse(
+                success=agent_result.success,
+                type="workflow",
+                message=display_message,
+                tool=None,
+                metadata={
+                    "task_id": agent_result.task_id,
+                    "workflow_id": output_dict.get("workflow_id"),
+                    "name": output_dict.get("workflow_name") or decision.workflow_name,
+                    "status": agent_result.status.value,
+                    "steps_total": agent_result.steps_total,
+                    "steps_completed": agent_result.steps_completed,
+                    "steps_failed": agent_result.steps_failed,
+                    "steps": output_dict.get("steps", []),
+                    "observations": [obs.model_dump() for obs in agent_result.observations],
+                    **output_dict,
+                },
+            )
 
         # 2.5 Agent Execution Path (RYVEN 3.0 Control Plane)
         if decision.intent == "agent":

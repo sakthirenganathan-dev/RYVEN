@@ -122,6 +122,31 @@ async def test_chat_endpoint_tool(test_app):
 
 
 @pytest.mark.asyncio
+async def test_agent_status_endpoints_use_the_chat_assistant_engine(test_app):
+    """The HUD task APIs report the same per-app AgentEngine used by chat."""
+    assistant = test_app.state.assistant
+    result = await assistant.agent_engine.execute_tool_request(
+        goal="What time is it?",
+        tool_name="time",
+        arguments={},
+        session_id="api-agent-test",
+    )
+
+    transport = ASGITransport(app=test_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        tasks_response = await client.get("/api/agent/tasks")
+        state_response = await client.get(
+            "/api/agent/state",
+            params={"task_id": result.task_id},
+        )
+
+    assert tasks_response.status_code == 200
+    assert any(task["task_id"] == result.task_id for task in tasks_response.json())
+    assert state_response.status_code == 200
+    assert state_response.json()["status"] == "COMPLETED"
+
+
+@pytest.mark.asyncio
 async def test_chat_endpoint_ai_with_context(test_app):
     """POST /api/chat maintains conversation context across requests with session_id."""
     transport = ASGITransport(app=test_app)

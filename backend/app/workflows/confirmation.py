@@ -72,6 +72,14 @@ class ConfirmationManager:
         "refresh_page",
         "take_browser_snapshot",
         "close_browser",
+        # M15 Internet & Web Inspection tools (safe read-only)
+        "internet_search",
+        "web_research",
+        "web_verify",
+        "browser_tabs",
+        "browser_snapshot",
+        "browser_screenshot",
+        "page_ocr",
     }
 
     # Categories requiring explicit user confirmation

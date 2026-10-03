@@ -39,7 +39,7 @@ Tasks are sequential where they share assistant/API contracts. No subagents are 
 | Task ID | Allowed paths | Forbidden paths | Overlap check |
 |---|---|---|---|
 | TASK-001 | `backend/app/core/assistant.py`, `backend/app/core/router.py`, `backend/app/agent/**`, `backend/app/workflows/confirmation.py`, `backend/app/workflows/engine.py`, related backend tests | `RAVAN/projects/**`, `.env`, `backend/.ryven/**`, `backend/scratch/**` | First slice; review existing user diffs before every touched file. |
-| TASK-002 | `backend/app/tools/**`, `backend/app/core/**`, relevant backend tests | `RAVAN/projects/**`, `.env`, `backend/.ryven/**`, `backend/scratch/**` | Runs after TASK-001; daily tools must use the frozen single-action contract. |
+| TASK-002 | `backend/app/tools/**`, `backend/app/core/**`, `backend/app/agent/**`, `backend/app/workflows/**`, `backend/app/api/routes.py`, relevant backend tests | `RAVAN/projects/**`, `.env`, `backend/.ryven/**`, `backend/scratch/**` | Runs after TASK-001; single actions and legacy workflow plans must use one Assistant-owned AgentEngine/ToolRegistry. |
 | TASK-003 | `backend/app/browser/**`, `backend/app/internet/**`, `backend/requirements.txt`, browser tests, browser API service/types/components | `RAVAN/projects/**`, `.env`, `backend/.ryven/**`, `backend/scratch/**` | Browser/API contracts from TASK-001 are frozen first. |
 | TASK-004 | New `backend/app/personal_memory/**`, `backend/app/api/routes.py`, registry/permissions/system prompt, memory tests, RAVAN memory service/types/panel | `RAVAN/projects/**`, `.env`, checkpoint database contents, `backend/scratch/**` | Memory table/store is separate from task checkpoint rows. |
 | TASK-005 | `backend/app/agent/**`, `backend/app/runtime/**`, `backend/app/orchestrator/**`, recovery tests | `RAVAN/projects/**`, `.env`, `backend/.ryven/**`, `backend/scratch/**` | Checkpoint migration is additive; protect existing M15 work. |
@@ -61,16 +61,16 @@ Tasks are sequential where they share assistant/API contracts. No subagents are 
 - Required evidence: Test output and diff review for touched paths.
 - Stop and report when: A protected workflow cannot be routed without bypassing a security module, or user-owned changes conflict with the required contract.
 
-### TASK-002 — Grounded Daily Windows Assistant
-- Objective: Ensure approved Windows requests use registered tools and report real outcomes, with client fallback never claiming mock actions succeeded.
-- Related FRs: FR-001, FR-002, FR-010.
-- Related ACs: AC-001, AC-002, AC-011.
+### TASK-002 — Grounded Daily Windows Assistant and Unified Request Entry
+- Objective: Route deterministic single-tool actions and validated legacy workflow plans through the Assistant-owned AgentEngine and registry; report real outcomes, with client fallback never claiming mock actions succeeded.
+- Related FRs: FR-001, FR-002, FR-005, FR-008, FR-010.
+- Related ACs: AC-001, AC-002, AC-005, AC-006, AC-009, AC-011.
 - Inputs: TASK-001 action/response contract.
 - Dependencies: TASK-001.
 - Allowed files/directories: Ownership Map TASK-002.
 - Forbidden files/directories: All listed forbidden paths.
-- Required outputs: Real tool status/error mapping and tests for app/folder/file/clipboard/system-status routing.
-- Required checks: Focused routing/API tests; controlled Windows launch smoke tests.
+- Required outputs: Real tool status/error mapping, complete capability map, workflow-plan adapter, same-engine task endpoints, and tests for app/folder/file/clipboard/system-status routing.
+- Required checks: Focused routing/adapter/API tests; controlled Windows launch smoke tests.
 - Required evidence: HTTP responses and process identity for Chrome/Code; blocked-operation tests.
 - Stop and report when: A task needs unrestricted process, system-root, credential, or destructive access.
 

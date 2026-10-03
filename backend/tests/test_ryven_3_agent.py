@@ -21,7 +21,7 @@ from app.actions.event_bus import action_bus
 from app.actions.models import ActionStatus, ActionType
 from app.actions.service import action_service
 from app.agent.capability_router import CapabilityRouter
-from app.agent.engine import agent_engine
+from app.agent.engine import AgentEngine, agent_engine
 from app.agent.models import (
     AgentExecutionResult,
     AgentPlan,
@@ -35,7 +35,10 @@ from app.agent.planner import AgentPlanner
 from app.core.assistant import Assistant
 from app.core.router import IntentRouter
 from app.tools.registry import create_default_registry
-from app.workflows.models import WorkflowExecutionResult, WorkflowState
+from app.tools.base import BaseTool
+from app.tools.registry import ToolRegistry
+from app.workflows.engine import WorkflowEngine
+from app.workflows.models import WorkflowDefinition, WorkflowExecutionResult, WorkflowState, WorkflowStep
 from app.workflows.models import WorkflowExecutionResult, WorkflowState
 
 
@@ -398,3 +401,40 @@ async def test_assistant_routes_workflow_intent_through_agent_engine():
     assert response.message == "Workspace preparation completed."
     agent_engine.execute_workflow_goal.assert_awaited_once()
     workflow_engine.run_from_query.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_agent_engine_executes_existing_workflow_plan_through_shared_registry():
+    """Validated workflow plans use the same registry and agent lifecycle."""
+    class FakeSystemInfoTool(BaseTool):
+        name = "system_info"
+        description = "Fake system information for adapter test"
+        input_schema = {}
+
+        async def execute(self, **kwargs):
+            return {"success": True, "message": "Observed fake system state."}
+
+    registry = ToolRegistry()
+    registry.register(FakeSystemInfoTool())
+    workflow_engine = WorkflowEngine(registry=registry)
+    workflow = WorkflowDefinition(
+        workflow_id="wf-adapter-test",
+        name="Safe inspection",
+        description="One read-only step",
+        steps=[
+            WorkflowStep(
+                step_id="step-system-info",
+                tool_name="system_info",
+                name="Read system information",
+            )
+        ],
+    )
+    workflow_engine.plan_workflow = lambda _goal: workflow
+    engine = AgentEngine(registry=registry, workflow_engine=workflow_engine)
+
+    result = await engine.execute_workflow_goal("inspect system state")
+
+    assert result.success is True
+    assert result.steps_completed == 1
+    assert result.final_output["workflow_id"] == "wf-adapter-test"
+    assert engine.orchestrator.registry is registry
