@@ -1,0 +1,7 @@
+{
+  "name": "m11-git-project",
+  "version": "1.0.0",
+  "scripts": {
+    "build": "node -e \"console.log('build ok')\""
+  }
+}
