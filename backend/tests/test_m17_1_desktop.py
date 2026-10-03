@@ -1420,7 +1420,891 @@ class TestDesktopTargetResolverPhase4:
             assert res.confidence >= 0.0
 
 
+# ===========================================================================
+# Phase 5: Semantic Desktop Action Execution Tests
+# ===========================================================================
 
+class TestDesktopActionEnginePhase5:
+    """Comprehensive test suite for Milestone 17.1 Phase 5 Semantic Desktop Action Execution."""
 
+    @pytest.fixture
+    def mock_win(self):
+        """Create a standard allowlisted Notepad window state fixture."""
+        from app.control.models import DesktopWindowState
+        return DesktopWindowState(
+            hwnd=12345,
+            process_id=4567,
+            executable="notepad.exe",
+            application="Notepad",
+            title="Untitled - Notepad",
+            left=100,
+            top=100,
+            width=800,
+            height=600,
+            visible=True,
+            focused=True,
+        )
 
+    @pytest.fixture
+    def mock_elem(self):
+        """Create a standard validated UI element fixture."""
+        from app.control.models import DesktopUIElement, DesktopTargetSource
+        return DesktopUIElement(
+            element_id="elem-save",
+            role="button",
+            text="Save",
+            bounds={"left": 50, "top": 50, "width": 80, "height": 30},
+            confidence=0.95,
+            source=DesktopTargetSource.VISION,
+            actionable=True,
+        )
 
+    def test_5_1_action_engine_construction(self):
+        """1. Action engine default construction and component presence."""
+        from app.desktop.action_engine import DesktopActionEngine
+        engine = DesktopActionEngine()
+        assert engine.driver is not None
+        assert engine.resolver is not None
+        assert engine.confirmation_mgr is not None
+        assert engine.permission_mgr is not None
+
+    def test_5_2_existing_driver_reuse(self):
+        """2. Existing WindowsDesktopDriver is reused without second driver creation."""
+        from app.desktop.action_engine import desktop_action_engine
+        from app.desktop.interaction import desktop_driver
+        assert desktop_action_engine.driver is desktop_driver
+
+    def test_5_3_existing_resolver_reuse(self):
+        """3. Existing DesktopTargetResolver is reused without second resolver creation."""
+        from app.desktop.action_engine import desktop_action_engine
+        from app.desktop.resolver import desktop_target_resolver
+        assert desktop_action_engine.resolver is desktop_target_resolver
+
+    @pytest.mark.asyncio
+    async def test_5_4_target_resolution_before_click(self, mock_win, mock_elem):
+        """4. Verify DesktopTargetResolver is invoked and resolves target before click."""
+        from unittest.mock import AsyncMock, MagicMock
+        from app.desktop.action_engine import DesktopActionEngine
+        from app.control.models import DesktopActionRequest, DesktopActionType, DesktopTargetResolutionResult
+
+        mock_driver = MagicMock()
+        mock_driver.validate_window_application.return_value = (True, "Notepad", "notepad.exe", 4567)
+        mock_driver.get_window_info.return_value = mock_win
+        mock_driver.focus_window.return_value = True
+        mock_driver.click.return_value = {"success": True, "action": "click", "x": 190, "y": 165}
+
+        mock_resolver = MagicMock()
+        mock_resolver.resolve_target = AsyncMock(return_value=DesktopTargetResolutionResult(
+            success=True,
+            target="Save",
+            element=mock_elem,
+            window=mock_win,
+            confidence=0.95,
+        ))
+
+        engine = DesktopActionEngine(driver=mock_driver, resolver=mock_resolver)
+        req = DesktopActionRequest(action=DesktopActionType.CLICK, target="Save", hwnd=12345)
+        res = await engine.execute_action(req)
+
+        assert res.success is True
+        mock_resolver.resolve_target.assert_awaited_once()
+        mock_driver.click.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_5_5_target_validation(self, mock_win, mock_elem):
+        """5. Valid target with finite bounds and confidence executes successfully."""
+        from unittest.mock import AsyncMock, MagicMock
+        from app.desktop.action_engine import DesktopActionEngine
+        from app.control.models import DesktopActionRequest, DesktopActionType, DesktopTargetResolutionResult
+
+        mock_driver = MagicMock()
+        mock_driver.validate_window_application.return_value = (True, "Notepad", "notepad.exe", 4567)
+        mock_driver.get_window_info.return_value = mock_win
+        mock_driver.focus_window.return_value = True
+        mock_driver.click.return_value = {"success": True, "action": "click"}
+
+        mock_resolver = MagicMock()
+        mock_resolver.resolve_target = AsyncMock(return_value=DesktopTargetResolutionResult(
+            success=True,
+            target="Save",
+            element=mock_elem,
+            window=mock_win,
+            confidence=0.95,
+        ))
+
+        engine = DesktopActionEngine(driver=mock_driver, resolver=mock_resolver)
+        res = await engine.execute_action(DesktopActionRequest(action=DesktopActionType.CLICK, target="Save", hwnd=12345))
+        assert res.success is True
+        assert res.resolved_element.text == "Save"
+
+    @pytest.mark.asyncio
+    async def test_5_6_application_allowlist_enforcement(self):
+        """6. Application outside approved allowlist is rejected with SECURITY failure."""
+        from app.desktop.action_engine import DesktopActionEngine
+        from app.control.models import DesktopActionRequest, DesktopActionType, FailureClass
+
+        engine = DesktopActionEngine()
+        req = DesktopActionRequest(action=DesktopActionType.INSPECT, application="MalwareApp")
+        res = await engine.execute_action(req)
+        assert res.success is False
+        assert res.failure_class == FailureClass.SECURITY
+
+    @pytest.mark.asyncio
+    async def test_5_7_hwnd_validation(self):
+        """7. Invalid or non-existent HWND is rejected."""
+        from unittest.mock import MagicMock
+        from app.desktop.action_engine import DesktopActionEngine
+        from app.control.models import DesktopActionRequest, DesktopActionType, FailureClass
+
+        mock_driver = MagicMock()
+        mock_driver.validate_window_application.side_effect = ValueError("WINDOW_NOT_FOUND")
+
+        engine = DesktopActionEngine(driver=mock_driver)
+        req = DesktopActionRequest(action=DesktopActionType.FOCUS, hwnd=999999)
+        res = await engine.execute_action(req)
+        assert res.success is False
+        assert res.failure_class == FailureClass.WINDOW_NOT_FOUND
+
+    @pytest.mark.asyncio
+    async def test_5_8_executable_validation(self):
+        """8. HWND with unapproved process executable is rejected with SECURITY failure."""
+        from unittest.mock import MagicMock
+        from app.desktop.action_engine import DesktopActionEngine
+        from app.control.models import DesktopActionRequest, DesktopActionType, FailureClass
+
+        mock_driver = MagicMock()
+        mock_driver.validate_window_application.side_effect = PermissionError("PERMISSION_DENIED")
+
+        engine = DesktopActionEngine(driver=mock_driver)
+        req = DesktopActionRequest(action=DesktopActionType.FOCUS, hwnd=123)
+        res = await engine.execute_action(req)
+        assert res.success is False
+        assert res.failure_class == FailureClass.SECURITY
+
+    @pytest.mark.asyncio
+    async def test_5_9_bounds_validation(self, mock_win):
+        """9. Negative target coordinate bounds are rejected."""
+        from unittest.mock import AsyncMock, MagicMock
+        from app.desktop.action_engine import DesktopActionEngine
+        from app.control.models import DesktopActionRequest, DesktopActionType, DesktopUIElement, DesktopTargetResolutionResult, FailureClass
+
+        bad_elem = DesktopUIElement(
+            role="button",
+            text="Negative Bounds",
+            bounds={"left": -10, "top": 50, "width": 80, "height": 30},
+            confidence=0.95,
+        )
+        mock_driver = MagicMock()
+        mock_driver.validate_window_application.return_value = (True, "Notepad", "notepad.exe", 4567)
+        mock_driver.get_window_info.return_value = mock_win
+
+        mock_resolver = MagicMock()
+        mock_resolver.resolve_target = AsyncMock(return_value=DesktopTargetResolutionResult(
+            success=True,
+            target="Negative Bounds",
+            element=bad_elem,
+            window=mock_win,
+            confidence=0.95,
+        ))
+
+        engine = DesktopActionEngine(driver=mock_driver, resolver=mock_resolver)
+        res = await engine.execute_action(DesktopActionRequest(action=DesktopActionType.CLICK, target="Negative Bounds", hwnd=12345))
+        assert res.success is False
+        assert res.failure_class == FailureClass.TARGET_NOT_FOUND
+        assert not mock_driver.click.called
+
+    @pytest.mark.asyncio
+    async def test_5_10_zero_area_target_rejection(self, mock_win):
+        """10. Zero-area target element (width=0 or height=0) is rejected."""
+        from unittest.mock import AsyncMock, MagicMock
+        from app.desktop.action_engine import DesktopActionEngine
+        from app.control.models import DesktopActionRequest, DesktopActionType, DesktopUIElement, DesktopTargetResolutionResult, FailureClass
+
+        zero_elem = DesktopUIElement(
+            role="button",
+            text="Zero Width",
+            bounds={"left": 50, "top": 50, "width": 0, "height": 30},
+            confidence=0.95,
+        )
+        mock_driver = MagicMock()
+        mock_driver.validate_window_application.return_value = (True, "Notepad", "notepad.exe", 4567)
+        mock_driver.get_window_info.return_value = mock_win
+
+        mock_resolver = MagicMock()
+        mock_resolver.resolve_target = AsyncMock(return_value=DesktopTargetResolutionResult(
+            success=True,
+            target="Zero Width",
+            element=zero_elem,
+            window=mock_win,
+            confidence=0.95,
+        ))
+
+        engine = DesktopActionEngine(driver=mock_driver, resolver=mock_resolver)
+        res = await engine.execute_action(DesktopActionRequest(action=DesktopActionType.CLICK, target="Zero Width", hwnd=12345))
+        assert res.success is False
+        assert res.failure_class == FailureClass.TARGET_NOT_FOUND
+
+    @pytest.mark.asyncio
+    async def test_5_11_out_of_window_target_rejection(self, mock_win):
+        """11. Target with bounds exceeding window dimension is rejected."""
+        from unittest.mock import AsyncMock, MagicMock
+        from app.desktop.action_engine import DesktopActionEngine
+        from app.control.models import DesktopActionRequest, DesktopActionType, DesktopUIElement, DesktopTargetResolutionResult, FailureClass
+
+        oow_elem = DesktopUIElement(
+            role="button",
+            text="Exceeds Window",
+            bounds={"left": 750, "top": 50, "width": 100, "height": 30},  # left + width = 850 > 800
+            confidence=0.95,
+        )
+        mock_driver = MagicMock()
+        mock_driver.validate_window_application.return_value = (True, "Notepad", "notepad.exe", 4567)
+        mock_driver.get_window_info.return_value = mock_win
+
+        mock_resolver = MagicMock()
+        mock_resolver.resolve_target = AsyncMock(return_value=DesktopTargetResolutionResult(
+            success=True,
+            target="Exceeds Window",
+            element=oow_elem,
+            window=mock_win,
+            confidence=0.95,
+        ))
+
+        engine = DesktopActionEngine(driver=mock_driver, resolver=mock_resolver)
+        res = await engine.execute_action(DesktopActionRequest(action=DesktopActionType.CLICK, target="Exceeds Window", hwnd=12345))
+        assert res.success is False
+        assert res.failure_class == FailureClass.TARGET_NOT_FOUND
+
+    @pytest.mark.asyncio
+    async def test_5_12_low_confidence_rejection(self, mock_win):
+        """12. Target with confidence below safety threshold (0.80) is rejected."""
+        from unittest.mock import AsyncMock, MagicMock
+        from app.desktop.action_engine import DesktopActionEngine
+        from app.control.models import DesktopActionRequest, DesktopActionType, DesktopUIElement, DesktopTargetResolutionResult, FailureClass
+
+        low_elem = DesktopUIElement(
+            role="button",
+            text="Uncertain",
+            bounds={"left": 50, "top": 50, "width": 80, "height": 30},
+            confidence=0.65,
+        )
+        mock_driver = MagicMock()
+        mock_driver.validate_window_application.return_value = (True, "Notepad", "notepad.exe", 4567)
+        mock_driver.get_window_info.return_value = mock_win
+
+        mock_resolver = MagicMock()
+        mock_resolver.resolve_target = AsyncMock(return_value=DesktopTargetResolutionResult(
+            success=True,
+            target="Uncertain",
+            element=low_elem,
+            window=mock_win,
+            confidence=0.65,
+        ))
+
+        engine = DesktopActionEngine(driver=mock_driver, resolver=mock_resolver)
+        res = await engine.execute_action(DesktopActionRequest(action=DesktopActionType.CLICK, target="Uncertain", hwnd=12345))
+        assert res.success is False
+        assert res.failure_class == FailureClass.VISION_UNCERTAIN
+
+    @pytest.mark.asyncio
+    async def test_5_13_stale_target_rejection(self, mock_win, mock_elem):
+        """13. Stale window (minimized/closed) before execution is rejected with UI_CHANGED."""
+        from unittest.mock import AsyncMock, MagicMock
+        from app.desktop.action_engine import DesktopActionEngine
+        from app.control.models import DesktopActionRequest, DesktopActionType, DesktopWindowState, DesktopTargetResolutionResult, FailureClass
+
+        stale_win = DesktopWindowState(
+            hwnd=12345,
+            process_id=4567,
+            executable="notepad.exe",
+            application="Notepad",
+            title="Untitled - Notepad",
+            left=100,
+            top=100,
+            width=800,
+            height=600,
+            visible=False,  # Minimized / invisible
+            focused=False,
+        )
+        mock_driver = MagicMock()
+        mock_driver.validate_window_application.return_value = (True, "Notepad", "notepad.exe", 4567)
+        mock_driver.get_window_info.return_value = stale_win
+
+        mock_resolver = MagicMock()
+        mock_resolver.resolve_target = AsyncMock(return_value=DesktopTargetResolutionResult(
+            success=True,
+            target="Save",
+            element=mock_elem,
+            window=mock_win,
+            confidence=0.95,
+        ))
+
+        engine = DesktopActionEngine(driver=mock_driver, resolver=mock_resolver)
+        res = await engine.execute_action(DesktopActionRequest(action=DesktopActionType.CLICK, target="Save", hwnd=12345))
+        assert res.success is False
+        assert res.failure_class == FailureClass.UI_CHANGED
+
+    @pytest.mark.asyncio
+    async def test_5_14_click_execution(self, mock_win, mock_elem):
+        """14. CLICK execution calculates correct screen coordinates and invokes driver."""
+        from unittest.mock import AsyncMock, MagicMock
+        from app.desktop.action_engine import DesktopActionEngine
+        from app.control.models import DesktopActionRequest, DesktopActionType, DesktopTargetResolutionResult
+
+        mock_driver = MagicMock()
+        mock_driver.validate_window_application.return_value = (True, "Notepad", "notepad.exe", 4567)
+        mock_driver.get_window_info.return_value = mock_win
+        mock_driver.focus_window.return_value = True
+        mock_driver.click.return_value = {"success": True, "action": "click", "x": 190, "y": 165}
+
+        mock_resolver = MagicMock()
+        mock_resolver.resolve_target = AsyncMock(return_value=DesktopTargetResolutionResult(
+            success=True,
+            target="Save",
+            element=mock_elem,
+            window=mock_win,
+            confidence=0.95,
+        ))
+
+        engine = DesktopActionEngine(driver=mock_driver, resolver=mock_resolver)
+        res = await engine.execute_action(DesktopActionRequest(action=DesktopActionType.CLICK, target="Save", hwnd=12345))
+        assert res.success is True
+        # elem center_x = 50 + 40 = 90; window left = 100 -> screen_x = 190
+        # elem center_y = 50 + 15 = 65; window top = 100 -> screen_y = 165
+        mock_driver.click.assert_called_once_with(190, 165, 12345)
+
+    @pytest.mark.asyncio
+    async def test_5_15_double_click_execution(self, mock_win, mock_elem):
+        """15. DOUBLE_CLICK execution translates coordinates and invokes driver."""
+        from unittest.mock import AsyncMock, MagicMock
+        from app.desktop.action_engine import DesktopActionEngine
+        from app.control.models import DesktopActionRequest, DesktopActionType, DesktopTargetResolutionResult
+
+        mock_driver = MagicMock()
+        mock_driver.validate_window_application.return_value = (True, "Notepad", "notepad.exe", 4567)
+        mock_driver.get_window_info.return_value = mock_win
+        mock_driver.focus_window.return_value = True
+        mock_driver.double_click.return_value = {"success": True, "action": "double_click", "x": 190, "y": 165}
+
+        mock_resolver = MagicMock()
+        mock_resolver.resolve_target = AsyncMock(return_value=DesktopTargetResolutionResult(
+            success=True,
+            target="Item",
+            element=mock_elem,
+            window=mock_win,
+            confidence=0.95,
+        ))
+
+        engine = DesktopActionEngine(driver=mock_driver, resolver=mock_resolver)
+        res = await engine.execute_action(DesktopActionRequest(action=DesktopActionType.DOUBLE_CLICK, target="Item", hwnd=12345))
+        assert res.success is True
+        mock_driver.double_click.assert_called_once_with(190, 165, 12345)
+
+    @pytest.mark.asyncio
+    async def test_5_16_right_click_execution(self, mock_win, mock_elem):
+        """16. RIGHT_CLICK execution translates coordinates and invokes driver."""
+        from unittest.mock import AsyncMock, MagicMock
+        from app.desktop.action_engine import DesktopActionEngine
+        from app.control.models import DesktopActionRequest, DesktopActionType, DesktopTargetResolutionResult
+
+        mock_driver = MagicMock()
+        mock_driver.validate_window_application.return_value = (True, "Notepad", "notepad.exe", 4567)
+        mock_driver.get_window_info.return_value = mock_win
+        mock_driver.focus_window.return_value = True
+        mock_driver.right_click.return_value = {"success": True, "action": "right_click", "x": 190, "y": 165}
+
+        mock_resolver = MagicMock()
+        mock_resolver.resolve_target = AsyncMock(return_value=DesktopTargetResolutionResult(
+            success=True,
+            target="Item",
+            element=mock_elem,
+            window=mock_win,
+            confidence=0.95,
+        ))
+
+        engine = DesktopActionEngine(driver=mock_driver, resolver=mock_resolver)
+        res = await engine.execute_action(DesktopActionRequest(action=DesktopActionType.RIGHT_CLICK, target="Item", hwnd=12345))
+        assert res.success is True
+        mock_driver.right_click.assert_called_once_with(190, 165, 12345)
+
+    @pytest.mark.asyncio
+    async def test_5_17_type_execution(self, mock_win):
+        """17. TYPE execution invokes driver and scrubs text from details."""
+        from unittest.mock import MagicMock
+        from app.desktop.action_engine import DesktopActionEngine
+        from app.control.models import DesktopActionRequest, DesktopActionType
+
+        mock_driver = MagicMock()
+        mock_driver.validate_window_application.return_value = (True, "Notepad", "notepad.exe", 4567)
+        mock_driver.get_window_info.return_value = mock_win
+        mock_driver.focus_window.return_value = True
+        mock_driver.type_text.return_value = {"success": True, "action": "type_text", "characters": 11}
+
+        engine = DesktopActionEngine(driver=mock_driver)
+        res = await engine.execute_action(DesktopActionRequest(action=DesktopActionType.TYPE, text="Hello world", hwnd=12345))
+        assert res.success is True
+        mock_driver.type_text.assert_called_once_with("Hello world")
+        assert res.details.get("characters") == 11
+        assert "text" not in res.details
+
+    @pytest.mark.asyncio
+    async def test_5_18_key_execution(self, mock_win):
+        """18. KEY execution invokes driver with validated safe key."""
+        from unittest.mock import MagicMock
+        from app.desktop.action_engine import DesktopActionEngine
+        from app.control.models import DesktopActionRequest, DesktopActionType
+
+        mock_driver = MagicMock()
+        mock_driver.validate_window_application.return_value = (True, "Notepad", "notepad.exe", 4567)
+        mock_driver.get_window_info.return_value = mock_win
+        mock_driver.focus_window.return_value = True
+        mock_driver.press_key.return_value = {"success": True, "action": "press_key", "key": "enter"}
+
+        engine = DesktopActionEngine(driver=mock_driver)
+        res = await engine.execute_action(DesktopActionRequest(action=DesktopActionType.KEY, key="enter", hwnd=12345))
+        assert res.success is True
+        mock_driver.press_key.assert_called_once_with("enter")
+
+    @pytest.mark.asyncio
+    async def test_5_19_hotkey_execution(self, mock_win):
+        """19. HOTKEY execution invokes driver with validated keys."""
+        from unittest.mock import MagicMock
+        from app.desktop.action_engine import DesktopActionEngine
+        from app.control.models import DesktopActionRequest, DesktopActionType
+
+        mock_driver = MagicMock()
+        mock_driver.validate_window_application.return_value = (True, "Notepad", "notepad.exe", 4567)
+        mock_driver.get_window_info.return_value = mock_win
+        mock_driver.focus_window.return_value = True
+        mock_driver.hotkey.return_value = {"success": True, "action": "hotkey", "keys": ["ctrl", "s"]}
+
+        engine = DesktopActionEngine(driver=mock_driver)
+        res = await engine.execute_action(DesktopActionRequest(action=DesktopActionType.HOTKEY, hotkey=["ctrl", "s"], hwnd=12345))
+        assert res.success is True
+        mock_driver.hotkey.assert_called_once_with(["ctrl", "s"])
+
+    @pytest.mark.asyncio
+    async def test_5_20_scroll_execution(self, mock_win):
+        """20. SCROLL execution invokes driver with bounded amount."""
+        from unittest.mock import MagicMock
+        from app.desktop.action_engine import DesktopActionEngine
+        from app.control.models import DesktopActionRequest, DesktopActionType
+
+        mock_driver = MagicMock()
+        mock_driver.validate_window_application.return_value = (True, "Notepad", "notepad.exe", 4567)
+        mock_driver.get_window_info.return_value = mock_win
+        mock_driver.focus_window.return_value = True
+        mock_driver.scroll.return_value = {"success": True, "action": "scroll", "amount": -3}
+
+        engine = DesktopActionEngine(driver=mock_driver)
+        res = await engine.execute_action(DesktopActionRequest(action=DesktopActionType.SCROLL, scroll_amount=-3, hwnd=12345))
+        assert res.success is True
+        mock_driver.scroll.assert_called_once_with(-3, 12345)
+
+    @pytest.mark.asyncio
+    async def test_5_21_focus_execution(self, mock_win):
+        """21. FOCUS execution brings target window to foreground."""
+        from unittest.mock import MagicMock
+        from app.desktop.action_engine import DesktopActionEngine
+        from app.control.models import DesktopActionRequest, DesktopActionType
+
+        mock_driver = MagicMock()
+        mock_driver.validate_window_application.return_value = (True, "Notepad", "notepad.exe", 4567)
+        mock_driver.get_window_info.return_value = mock_win
+        mock_driver.focus_window.return_value = True
+
+        engine = DesktopActionEngine(driver=mock_driver)
+        res = await engine.execute_action(DesktopActionRequest(action=DesktopActionType.FOCUS, hwnd=12345))
+        assert res.success is True
+        mock_driver.focus_window.assert_called_once_with(12345)
+
+    @pytest.mark.asyncio
+    async def test_5_22_malformed_action_rejection(self):
+        """22. Action missing required fields is rejected with VALIDATION failure."""
+        from app.desktop.action_engine import DesktopActionEngine
+        from app.control.models import DesktopActionRequest, DesktopActionType, FailureClass
+
+        engine = DesktopActionEngine()
+        # KEY action without key
+        req = DesktopActionRequest(action=DesktopActionType.KEY)
+        res = await engine.execute_action(req)
+        assert res.success is False
+        assert res.failure_class == FailureClass.VALIDATION
+
+    def test_5_23_unsupported_key_rejection(self):
+        """23. Model rejects unsupported key at validation boundary."""
+        from pydantic import ValidationError
+        from app.control.models import DesktopActionRequest, DesktopActionType
+        with pytest.raises(ValidationError):
+            DesktopActionRequest(action=DesktopActionType.KEY, key="invalid_nonexistent_key_xyz")
+
+    def test_5_24_oversized_hotkey_rejection(self):
+        """24. Model rejects hotkey with more than 4 keys."""
+        from pydantic import ValidationError
+        from app.control.models import DesktopActionRequest, DesktopActionType
+        with pytest.raises(ValidationError):
+            DesktopActionRequest(action=DesktopActionType.HOTKEY, hotkey=["ctrl", "alt", "shift", "win", "tab"])
+
+    def test_5_25_oversized_type_input_rejection(self):
+        """25. Model rejects typing text longer than 1000 characters."""
+        from pydantic import ValidationError
+        from app.control.models import DesktopActionRequest, DesktopActionType
+        with pytest.raises(ValidationError):
+            DesktopActionRequest(action=DesktopActionType.TYPE, text="a" * 1001)
+
+    def test_5_26_secret_token_input_rejection(self):
+        """26. Model rejects credential and token patterns."""
+        from pydantic import ValidationError
+        from app.control.models import DesktopActionRequest, DesktopActionType
+        with pytest.raises(ValidationError):
+            DesktopActionRequest(action=DesktopActionType.TYPE, text="Bearer ghp_1234567890abcdef")
+
+    @pytest.mark.asyncio
+    async def test_5_27_confirmation_required_action(self, mock_win, mock_elem):
+        """27. Consequential target requires user confirmation and pauses execution."""
+        from unittest.mock import AsyncMock, MagicMock
+        from app.desktop.action_engine import DesktopActionEngine
+        from app.control.models import DesktopActionRequest, DesktopActionType, DesktopTargetResolutionResult, FailureClass
+
+        mock_driver = MagicMock()
+        mock_driver.validate_window_application.return_value = (True, "Notepad", "notepad.exe", 4567)
+        mock_driver.get_window_info.return_value = mock_win
+
+        mock_resolver = MagicMock()
+        mock_resolver.resolve_target = AsyncMock(return_value=DesktopTargetResolutionResult(
+            success=True,
+            target="Delete All",
+            element=mock_elem,
+            window=mock_win,
+            confidence=0.95,
+        ))
+
+        engine = DesktopActionEngine(driver=mock_driver, resolver=mock_resolver)
+        req = DesktopActionRequest(action=DesktopActionType.CLICK, target="Delete All", hwnd=12345, confirmed=False)
+        res = await engine.execute_action(req)
+
+        assert res.success is False
+        assert res.confirmation_required is True
+        assert res.confirmation_token is not None
+        assert res.failure_class == FailureClass.USER_ACTION_REQUIRED
+        assert not mock_driver.click.called
+
+    @pytest.mark.asyncio
+    async def test_5_28_confirmation_denial(self, mock_win, mock_elem):
+        """28. Unconfirmed consequential action remains blocked from executing."""
+        from unittest.mock import AsyncMock, MagicMock
+        from app.desktop.action_engine import DesktopActionEngine
+        from app.control.models import DesktopActionRequest, DesktopActionType, DesktopTargetResolutionResult
+
+        mock_driver = MagicMock()
+        mock_driver.validate_window_application.return_value = (True, "Notepad", "notepad.exe", 4567)
+        mock_driver.get_window_info.return_value = mock_win
+
+        mock_resolver = MagicMock()
+        mock_resolver.resolve_target = AsyncMock(return_value=DesktopTargetResolutionResult(
+            success=True,
+            target="Format Drive",
+            element=mock_elem,
+            window=mock_win,
+            confidence=0.95,
+        ))
+
+        engine = DesktopActionEngine(driver=mock_driver, resolver=mock_resolver)
+        res = await engine.execute_action(DesktopActionRequest(action=DesktopActionType.CLICK, target="Format Drive", hwnd=12345, confirmed=False))
+        assert res.confirmation_required is True
+        assert not mock_driver.click.called
+
+    @pytest.mark.asyncio
+    async def test_5_29_confirmation_approval(self, mock_win, mock_elem):
+        """29. Confirmed consequential action proceeds with execution."""
+        from unittest.mock import AsyncMock, MagicMock
+        from app.desktop.action_engine import DesktopActionEngine
+        from app.control.models import DesktopActionRequest, DesktopActionType, DesktopTargetResolutionResult
+
+        mock_driver = MagicMock()
+        mock_driver.validate_window_application.return_value = (True, "Notepad", "notepad.exe", 4567)
+        mock_driver.get_window_info.return_value = mock_win
+        mock_driver.focus_window.return_value = True
+        mock_driver.click.return_value = {"success": True, "action": "click", "x": 190, "y": 165}
+
+        mock_resolver = MagicMock()
+        mock_resolver.resolve_target = AsyncMock(return_value=DesktopTargetResolutionResult(
+            success=True,
+            target="Delete All",
+            element=mock_elem,
+            window=mock_win,
+            confidence=0.95,
+        ))
+
+        engine = DesktopActionEngine(driver=mock_driver, resolver=mock_resolver)
+        req = DesktopActionRequest(action=DesktopActionType.CLICK, target="Delete All", hwnd=12345, confirmed=True)
+        res = await engine.execute_action(req)
+
+        assert res.success is True
+        assert res.confirmation_required is False
+        mock_driver.click.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_5_30_telemetry_success(self, mock_win, mock_elem):
+        """30. Success path emits requested, validated, and executed events."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+        from app.desktop.action_engine import DesktopActionEngine
+        from app.control.models import DesktopActionRequest, DesktopActionType, DesktopTargetResolutionResult
+
+        mock_driver = MagicMock()
+        mock_driver.validate_window_application.return_value = (True, "Notepad", "notepad.exe", 4567)
+        mock_driver.get_window_info.return_value = mock_win
+        mock_driver.focus_window.return_value = True
+        mock_driver.click.return_value = {"success": True, "action": "click"}
+
+        mock_resolver = MagicMock()
+        mock_resolver.resolve_target = AsyncMock(return_value=DesktopTargetResolutionResult(
+            success=True,
+            target="Save",
+            element=mock_elem,
+            window=mock_win,
+            confidence=0.95,
+        ))
+
+        engine = DesktopActionEngine(driver=mock_driver, resolver=mock_resolver)
+        with patch("app.desktop.action_engine.action_bus.publish", new_callable=AsyncMock) as mock_pub:
+            res = await engine.execute_action(DesktopActionRequest(action=DesktopActionType.CLICK, target="Save", hwnd=12345))
+            assert res.success is True
+            # Verify event emission calls
+            assert mock_pub.await_count >= 3
+
+    @pytest.mark.asyncio
+    async def test_5_31_telemetry_failure(self):
+        """31. Failure path emits DESKTOP_ACTION_FAILED event."""
+        from unittest.mock import AsyncMock, patch
+        from app.desktop.action_engine import DesktopActionEngine
+        from app.control.models import DesktopActionRequest, DesktopActionType
+
+        engine = DesktopActionEngine()
+        with patch("app.desktop.action_engine.action_bus.publish", new_callable=AsyncMock) as mock_pub:
+            req = DesktopActionRequest(action=DesktopActionType.INSPECT, application="NonExistentBadApp")
+            res = await engine.execute_action(req)
+            assert res.success is False
+            # Check DESKTOP_ACTION_FAILED was published
+            published_types = [call.args[0].action_type for call in mock_pub.await_args_list]
+            from app.actions.models import ActionType
+            assert ActionType.DESKTOP_ACTION_FAILED in published_types
+
+    @pytest.mark.asyncio
+    async def test_5_32_sensitive_telemetry_redaction(self, mock_win):
+        """32. Sensitive text is never included in telemetry safe_metadata."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+        from app.desktop.action_engine import DesktopActionEngine
+        from app.control.models import DesktopActionRequest, DesktopActionType
+
+        mock_driver = MagicMock()
+        mock_driver.validate_window_application.return_value = (True, "Notepad", "notepad.exe", 4567)
+        mock_driver.get_window_info.return_value = mock_win
+        mock_driver.focus_window.return_value = True
+        mock_driver.type_text.return_value = {"success": True, "action": "type_text", "characters": 14}
+
+        engine = DesktopActionEngine(driver=mock_driver)
+        with patch("app.desktop.action_engine.action_bus.publish", new_callable=AsyncMock) as mock_pub:
+            res = await engine.execute_action(DesktopActionRequest(action=DesktopActionType.TYPE, text="SecretNote1234", hwnd=12345))
+            assert res.success is True
+            for call in mock_pub.await_args_list:
+                meta = call.args[0].safe_metadata
+                assert "SecretNote1234" not in str(meta)
+
+    @pytest.mark.asyncio
+    async def test_5_33_post_action_observation(self, mock_win, mock_elem):
+        """33. Mutating action executes bounded post-action observation."""
+        from unittest.mock import AsyncMock, MagicMock
+        from app.desktop.action_engine import DesktopActionEngine
+        from app.control.models import DesktopActionRequest, DesktopActionType, DesktopTargetResolutionResult, DesktopObservationResult
+
+        mock_driver = MagicMock()
+        mock_driver.validate_window_application.return_value = (True, "Notepad", "notepad.exe", 4567)
+        mock_driver.get_window_info.return_value = mock_win
+        mock_driver.focus_window.return_value = True
+        mock_driver.click.return_value = {"success": True, "action": "click"}
+
+        mock_resolver = MagicMock()
+        mock_resolver.resolve_target = AsyncMock(return_value=DesktopTargetResolutionResult(
+            success=True,
+            target="Save",
+            element=mock_elem,
+            window=mock_win,
+            confidence=0.95,
+        ))
+
+        mock_observer = MagicMock()
+        mock_observer.observe_desktop = AsyncMock(return_value=DesktopObservationResult(
+            active_application="Notepad",
+            active_window=mock_win,
+            windows=[mock_win],
+            observation_success=True,
+        ))
+
+        engine = DesktopActionEngine(driver=mock_driver, resolver=mock_resolver, observer=mock_observer)
+        res = await engine.execute_action(DesktopActionRequest(action=DesktopActionType.CLICK, target="Save", hwnd=12345))
+        assert res.success is True
+        assert res.post_observation is not None
+        mock_observer.observe_desktop.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_5_34_timeout_handling(self, mock_win, mock_elem):
+        """34. Driver timeout error is mapped to FailureClass.ACTION_TIMEOUT."""
+        from unittest.mock import AsyncMock, MagicMock
+        from app.desktop.action_engine import DesktopActionEngine
+        from app.control.models import DesktopActionRequest, DesktopActionType, DesktopTargetResolutionResult, FailureClass
+
+        mock_driver = MagicMock()
+        mock_driver.validate_window_application.return_value = (True, "Notepad", "notepad.exe", 4567)
+        mock_driver.get_window_info.return_value = mock_win
+        mock_driver.focus_window.return_value = True
+        mock_driver.click.side_effect = TimeoutError("Action execution timed out after 5.0s")
+
+        mock_resolver = MagicMock()
+        mock_resolver.resolve_target = AsyncMock(return_value=DesktopTargetResolutionResult(
+            success=True,
+            target="Save",
+            element=mock_elem,
+            window=mock_win,
+            confidence=0.95,
+        ))
+
+        engine = DesktopActionEngine(driver=mock_driver, resolver=mock_resolver)
+        res = await engine.execute_action(DesktopActionRequest(action=DesktopActionType.CLICK, target="Save", hwnd=12345))
+        assert res.success is False
+        assert res.failure_class == FailureClass.ACTION_TIMEOUT
+
+    @pytest.mark.asyncio
+    async def test_5_35_driver_failure_handling(self, mock_win, mock_elem):
+        """35. Unexpected driver failure produces structured result without crash."""
+        from unittest.mock import AsyncMock, MagicMock
+        from app.desktop.action_engine import DesktopActionEngine
+        from app.control.models import DesktopActionRequest, DesktopActionType, DesktopTargetResolutionResult, FailureClass
+
+        mock_driver = MagicMock()
+        mock_driver.validate_window_application.return_value = (True, "Notepad", "notepad.exe", 4567)
+        mock_driver.get_window_info.return_value = mock_win
+        mock_driver.focus_window.return_value = True
+        mock_driver.click.side_effect = RuntimeError("Low-level driver communication lost")
+
+        mock_resolver = MagicMock()
+        mock_resolver.resolve_target = AsyncMock(return_value=DesktopTargetResolutionResult(
+            success=True,
+            target="Save",
+            element=mock_elem,
+            window=mock_win,
+            confidence=0.95,
+        ))
+
+        engine = DesktopActionEngine(driver=mock_driver, resolver=mock_resolver)
+        res = await engine.execute_action(DesktopActionRequest(action=DesktopActionType.CLICK, target="Save", hwnd=12345))
+        assert res.success is False
+        assert res.error == "Low-level driver communication lost"
+        assert res.failure_class == FailureClass.PERMANENT
+
+    def test_5_36_no_arbitrary_shell_execution(self):
+        """36. Verify no subprocess / shell modules are imported in action_engine."""
+        import app.desktop.action_engine as ae
+        import inspect
+        source = inspect.getsource(ae)
+        assert "import subprocess" not in source
+        assert "from subprocess" not in source
+        assert "os.system" not in source
+
+    def test_5_37_no_subprocess_usage_in_driver(self):
+        """37. Verify interaction.py driver has zero subprocess usage."""
+        import app.desktop.interaction as inter
+        import inspect
+        source = inspect.getsource(inter)
+        assert "import subprocess" not in source
+        assert "from subprocess" not in source
+        assert "os.system" not in source
+        assert "os.popen" not in source
+
+    @pytest.mark.asyncio
+    async def test_5_38_unknown_application_rejection(self):
+        """38. Unknown / unapproved application name is rejected cleanly."""
+        from app.desktop.action_engine import DesktopActionEngine
+        from app.control.models import DesktopActionRequest, DesktopActionType, FailureClass
+
+        engine = DesktopActionEngine()
+        req = DesktopActionRequest(action=DesktopActionType.FOCUS, application="NonApprovedAppXYZ")
+        res = await engine.execute_action(req)
+        assert res.success is False
+        assert res.failure_class == FailureClass.SECURITY
+
+    @pytest.mark.asyncio
+    async def test_5_39_ambiguous_target_rejection(self, mock_win):
+        """39. Ambiguous target returned from resolver fails closed."""
+        from unittest.mock import AsyncMock, MagicMock
+        from app.desktop.action_engine import DesktopActionEngine
+        from app.control.models import DesktopActionRequest, DesktopActionType, DesktopTargetResolutionResult, FailureClass
+
+        mock_driver = MagicMock()
+        mock_driver.validate_window_application.return_value = (True, "Notepad", "notepad.exe", 4567)
+        mock_driver.get_window_info.return_value = mock_win
+
+        mock_resolver = MagicMock()
+        mock_resolver.resolve_target = AsyncMock(return_value=DesktopTargetResolutionResult(
+            success=False,
+            target="Button",
+            element=None,
+            confidence=0.85,
+            failure_class=FailureClass.TARGET_NOT_FOUND,
+            error="Ambiguous target: multiple UI elements matched 'Button'",
+        ))
+
+        engine = DesktopActionEngine(driver=mock_driver, resolver=mock_resolver)
+        res = await engine.execute_action(DesktopActionRequest(action=DesktopActionType.CLICK, target="Button", hwnd=12345))
+        assert res.success is False
+        assert res.failure_class == FailureClass.TARGET_NOT_FOUND
+        assert not mock_driver.click.called
+
+    @pytest.mark.asyncio
+    async def test_5_40_regression_compatibility_m17_0(self, mock_win, mock_elem):
+        """40. RyvenControlEngine.execute_desktop_action integrates smoothly."""
+        from unittest.mock import AsyncMock, MagicMock
+        from app.control.engine import RyvenControlEngine
+        from app.control.models import DesktopActionRequest, DesktopActionType, DesktopTargetResolutionResult
+        from app.desktop.action_engine import DesktopActionEngine
+
+        mock_driver = MagicMock()
+        mock_driver.validate_window_application.return_value = (True, "Notepad", "notepad.exe", 4567)
+        mock_driver.get_window_info.return_value = mock_win
+        mock_driver.focus_window.return_value = True
+        mock_driver.click.return_value = {"success": True, "action": "click"}
+
+        mock_resolver = MagicMock()
+        mock_resolver.resolve_target = AsyncMock(return_value=DesktopTargetResolutionResult(
+            success=True,
+            target="Save",
+            element=mock_elem,
+            window=mock_win,
+            confidence=0.95,
+        ))
+
+        action_engine = DesktopActionEngine(driver=mock_driver, resolver=mock_resolver)
+        control_engine = RyvenControlEngine(desktop_actions=action_engine)
+
+        req = DesktopActionRequest(action=DesktopActionType.CLICK, target="Save", hwnd=12345)
+        res = await control_engine.execute_desktop_action(req)
+        assert res.success is True
+        assert res.action == DesktopActionType.CLICK
+
+    def test_5_41_regression_compatibility_m17_1_phases_1_to_4(self):
+        """41. Regression compatibility: models, driver, observer, resolver imports all succeed."""
+        from app.control.models import DesktopWindowState, DesktopUIElement, DesktopActionType
+        from app.desktop.interaction import WindowsDesktopDriver, desktop_driver
+        from app.control.observer import ObserverEngine, observer_engine
+        from app.desktop.resolver import DesktopTargetResolver, desktop_target_resolver
+        from app.desktop.action_engine import DesktopActionEngine, desktop_action_engine
+        from app.tools.registry import create_default_registry
+
+        reg = create_default_registry()
+        assert reg.has_tool("desktop_inspect")
+        assert reg.has_tool("desktop_focus")
+        assert reg.has_tool("desktop_click")
+        assert reg.has_tool("desktop_type")
+        assert reg.has_tool("desktop_key")
+        assert reg.has_tool("desktop_hotkey")
+        assert reg.has_tool("desktop_scroll")

@@ -23,7 +23,6 @@ from app.actions.models import ActionEvent, ActionStatus, ActionType
 from app.browser.engine import browser_engine
 from app.control.models import ObservationRecord, DesktopObservationResult, DesktopWindowState
 from app.core.logging_config import logger
-from app.desktop.interaction import desktop_driver as default_desktop_driver, WindowsDesktopDriver
 from app.tools.app_tool import OpenApplicationTool
 from app.tools.process_tool import _get_running_approved_processes
 from app.tools.registry import ToolRegistry, create_default_registry
@@ -35,11 +34,21 @@ class ObserverEngine:
     def __init__(
         self,
         tool_registry: Optional[ToolRegistry] = None,
-        desktop_driver: Optional[WindowsDesktopDriver] = None,
+        desktop_driver: Optional[Any] = None,
     ) -> None:
         self.tool_reg = tool_registry or create_default_registry()
         self.browser = browser_engine
-        self.desktop_driver = desktop_driver or default_desktop_driver
+        self.desktop_driver = desktop_driver
+
+    def _get_desktop_driver(self) -> Any:
+        if self.desktop_driver is not None:
+            return self.desktop_driver
+        try:
+            from app.desktop.interaction import desktop_driver as default_desktop_driver
+            self.desktop_driver = default_desktop_driver
+            return self.desktop_driver
+        except Exception:
+            return None
 
     async def observe_environment(
         self,
@@ -167,7 +176,10 @@ class ObserverEngine:
         )
 
         try:
-            raw_windows = self.desktop_driver.inspect_windows()
+            driver = self._get_desktop_driver()
+            if driver is None:
+                raise RuntimeError("Desktop driver is not available")
+            raw_windows = driver.inspect_windows()
             active_window: Optional[DesktopWindowState] = None
 
             # Identify focused window among allowlisted windows

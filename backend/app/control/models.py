@@ -186,6 +186,7 @@ class DesktopTargetResolutionResult(BaseModel):
     success: bool
     target: str
     element: Optional[DesktopUIElement] = None
+    window: Optional[DesktopWindowState] = None
     confidence: float = Field(0.0, ge=0.0, le=1.0)
     failure_class: Optional[FailureClass] = None
     error: Optional[str] = None
@@ -278,6 +279,27 @@ class DesktopActionRequest(BaseModel):
             if forbidden in lowered:
                 raise ValueError(f"Desktop typing text cannot expose credentials: {forbidden}")
         return v
+
+
+class DesktopActionResult(BaseModel):
+    """Structured result of executing a controlled desktop interaction."""
+    action: DesktopActionType = Field(..., description="Executed or attempted desktop action")
+    success: bool = Field(..., description="Whether action execution succeeded")
+    application: Optional[str] = Field(None, description="Target application name")
+    hwnd: Optional[int] = Field(None, description="Target window handle")
+    target: Optional[str] = Field(None, description="Resolved semantic target")
+    resolved_element: Optional[DesktopUIElement] = Field(None, description="Resolved UI element")
+    confidence: Optional[float] = Field(None, description="Target resolution confidence")
+    x: Optional[int] = Field(None, description="Executed screen X coordinate")
+    y: Optional[int] = Field(None, description="Executed screen Y coordinate")
+    duration_ms: float = Field(0.0, description="Execution duration in milliseconds")
+    failure_class: Optional[FailureClass] = Field(None, description="Categorized failure class on error")
+    error: Optional[str] = Field(None, description="Error message on failure")
+    message: Optional[str] = Field(None, description="Status or confirmation message")
+    confirmation_required: bool = Field(False, description="Whether confirmation is required before proceeding")
+    confirmation_token: Optional[str] = Field(None, description="Token generated for confirmation")
+    post_observation: Optional[Any] = Field(None, description="Optional post-action observation")
+    details: Dict[str, Any] = Field(default_factory=dict, description="Safe execution details")
 
 
 class ScopeBoundary(str, Enum):

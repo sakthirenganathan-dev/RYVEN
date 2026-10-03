@@ -310,6 +310,27 @@ def create_default_registry() -> ToolRegistry:
     registry.register(WebUploadTool())
     registry.register(WebVerifyDownloadTool())
     registry.register(WebVerifyUploadTool())
+    # RYVEN 3.0 Controlled Desktop Interaction Tools (M17.1)
+    from app.desktop.tools import (
+        DesktopInspectTool,
+        DesktopFocusTool,
+        DesktopClickTool,
+        DesktopDoubleClickTool,
+        DesktopRightClickTool,
+        DesktopTypeTool,
+        DesktopKeyTool,
+        DesktopHotkeyTool,
+        DesktopScrollTool,
+    )
+    registry.register(DesktopInspectTool())
+    registry.register(DesktopFocusTool())
+    registry.register(DesktopClickTool())
+    registry.register(DesktopDoubleClickTool())
+    registry.register(DesktopRightClickTool())
+    registry.register(DesktopTypeTool())
+    registry.register(DesktopKeyTool())
+    registry.register(DesktopHotkeyTool())
+    registry.register(DesktopScrollTool())
     return registry
 
 

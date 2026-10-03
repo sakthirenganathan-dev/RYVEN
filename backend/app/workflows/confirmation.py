@@ -86,6 +86,9 @@ class ConfirmationManager:
         "read_file",
         "inspect_applications",
         "focus_application",
+        "desktop_inspect",
+        "desktop_focus",
+        "desktop_scroll",
     }
 
     # Categories requiring explicit user confirmation

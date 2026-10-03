@@ -115,6 +115,9 @@ SAFE_READ_TOOLS: frozenset[str] = frozenset(
         "read_file",
         "web_search",
         "fetch_web_content",
+        "desktop_inspect",
+        "desktop_focus",
+        "desktop_scroll",
     }
 )
 
@@ -132,6 +135,15 @@ TOOL_CATEGORY_MAP: Dict[str, PermissionCategory] = {
     "focus_application": PermissionCategory.SYSTEM,
     "close_application": PermissionCategory.SYSTEM,
     "inspect_applications": PermissionCategory.SYSTEM,
+    "desktop_inspect": PermissionCategory.READ,
+    "desktop_focus": PermissionCategory.SYSTEM,
+    "desktop_scroll": PermissionCategory.SYSTEM,
+    "desktop_click": PermissionCategory.SYSTEM,
+    "desktop_double_click": PermissionCategory.SYSTEM,
+    "desktop_right_click": PermissionCategory.SYSTEM,
+    "desktop_type": PermissionCategory.SYSTEM,
+    "desktop_key": PermissionCategory.SYSTEM,
+    "desktop_hotkey": PermissionCategory.SYSTEM,
     "open_website": PermissionCategory.BROWSER,
     "open_folder": PermissionCategory.READ,
     "open_file": PermissionCategory.READ,

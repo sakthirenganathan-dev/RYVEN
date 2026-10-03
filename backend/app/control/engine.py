@@ -38,15 +38,15 @@ import uuid
 
 from app.actions.event_bus import action_bus
 from app.actions.models import ActionEvent, ActionStatus, ActionType
-from app.agents.coordinator import AgentCoordinator, agent_coordinator
 from app.agents.models import AgentStatus
-from app.agents.planning_engine import PlanningEngine, planning_engine
 from app.agents.planning_models import PlanningRequest, PlanStatus
 from app.agents.task_graph import AgentTaskGraph
 from app.control.models import (
     ControlRequest,
     ControlResult,
     ControlStatus,
+    DesktopActionRequest,
+    DesktopActionResult,
     DiscoveredScopeItem,
     FailureClass,
     ObservationRecord,
@@ -66,19 +66,43 @@ class RyvenControlEngine:
 
     def __init__(
         self,
-        planner: Optional[PlanningEngine] = None,
-        coordinator: Optional[AgentCoordinator] = None,
+        planner: Optional[Any] = None,
+        coordinator: Optional[Any] = None,
         tool_reg: Optional[ToolRegistry] = None,
         permissions: Optional[CapabilityPermissionManager] = None,
         observer: Optional[ObserverEngine] = None,
         checkpoints: Optional[CheckpointStore] = None,
+        desktop_actions: Optional[Any] = None,
     ) -> None:
-        self.planner = planner or planning_engine
-        self.coordinator = coordinator or agent_coordinator
+        if planner is not None:
+            self.planner = planner
+        else:
+            try:
+                from app.agents.planning_engine import planning_engine
+                self.planner = planning_engine
+            except Exception:
+                self.planner = None
+
+        if coordinator is not None:
+            self.coordinator = coordinator
+        else:
+            try:
+                from app.agents.coordinator import agent_coordinator
+                self.coordinator = agent_coordinator
+            except Exception:
+                self.coordinator = None
         self.tool_reg = tool_reg or create_default_registry()
         self.permissions = permissions or permission_manager
         self.observer = observer or observer_engine
         self.checkpoints = checkpoints or checkpoint_store
+        if desktop_actions is not None:
+            self.desktop_actions = desktop_actions
+        else:
+            try:
+                from app.desktop.action_engine import desktop_action_engine
+                self.desktop_actions = desktop_action_engine
+            except Exception:
+                self.desktop_actions = None
         self.recovery = RuntimeRecoveryService(store=self.checkpoints)
         self._active_executions: Dict[str, ControlResult] = {}
 
@@ -447,6 +471,19 @@ class RyvenControlEngine:
             )
         )
         return result
+
+    async def execute_desktop_action(
+        self,
+        request: DesktopActionRequest,
+        auto_confirm: bool = False,
+        task_id: Optional[str] = None,
+    ) -> DesktopActionResult:
+        """Execute a controlled desktop action through the safe authority chain."""
+        return await self.desktop_actions.execute_action(
+            request=request,
+            auto_confirm=auto_confirm,
+            task_id=task_id,
+        )
 
     # Aliases for compatibility
     confirm_action = confirm_control
