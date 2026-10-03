@@ -18,6 +18,9 @@ class CapabilityRouter:
     CAPABILITY_TOOL_MAP: Dict[CapabilityGroup, List[str]] = {
         CapabilityGroup.COMPUTER: [
             "open_application",
+            "inspect_applications",
+            "focus_application",
+            "close_application",
         ],
         CapabilityGroup.BROWSER: [
             "open_browser",

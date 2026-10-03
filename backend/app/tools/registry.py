@@ -140,6 +140,14 @@ def create_default_registry() -> ToolRegistry:
     registry.register(TimeTool())
     registry.register(SystemStatusTool())
     registry.register(SystemInfoTool())
+    from app.tools.process_tool import (
+        InspectApplicationsTool,
+        FocusApplicationTool,
+        CloseApplicationTool,
+    )
+    registry.register(InspectApplicationsTool())
+    registry.register(FocusApplicationTool())
+    registry.register(CloseApplicationTool())
     registry.register(OpenApplicationTool())
     registry.register(OpenWebsiteTool())
     registry.register(OpenFolderTool())

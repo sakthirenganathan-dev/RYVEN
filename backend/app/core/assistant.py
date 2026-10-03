@@ -64,8 +64,11 @@ class Assistant:
             guard=self.safety_guard,
         )
 
-        # 8. One agent control plane sharing this assistant's registry, guard, and workflow planner
+        # 8. Control plane & Agent engine sharing this assistant's registry, guard, and workflow planner
+        self._explicit_agent_engine = agent_engine is not None
         if agent_engine is None:
+            from app.control.engine import ryven_control_engine
+            self.control_engine = ryven_control_engine
             from app.agent.engine import AgentEngine
             self.agent_engine = AgentEngine(
                 registry=self.registry,
@@ -74,6 +77,7 @@ class Assistant:
             )
         else:
             self.agent_engine = agent_engine
+            self.control_engine = agent_engine
 
         logger.info(
             f"Assistant online. AI Provider: {self.ai_provider.provider_name} | "
@@ -116,12 +120,27 @@ class Assistant:
 
         # 2. Workflow Execution Path (Phase 4 & 4.1)
         if decision.intent == "workflow":
-            logger.info(f"Routing workflow intent through AgentEngine: '{decision.workflow_name}'")
+            logger.info(f"Routing workflow intent through workflow engine: '{decision.workflow_name}'")
             try:
-                agent_result = await self.agent_engine.execute_workflow_goal(
-                    goal=clean_text,
-                    session_id=session_id,
-                )
+                workflow_result = None
+                if self._explicit_agent_engine:
+                    workflow_result = await self.agent_engine.execute_workflow_goal(
+                        goal=clean_text,
+                        session_id=session_id,
+                        auto_confirm=auto_confirm,
+                    )
+                elif hasattr(self.workflow_engine, "run_from_query"):
+                    workflow_result = await self.workflow_engine.run_from_query(
+                        clean_text,
+                        auto_confirm=auto_confirm,
+                    )
+
+                if workflow_result is None:
+                    workflow_result = await self.agent_engine.execute_workflow_goal(
+                        goal=clean_text,
+                        session_id=session_id,
+                        auto_confirm=auto_confirm,
+                    )
             except Exception as exc:
                 logger.error(f"Unified workflow execution failed: {exc}", exc_info=True)
                 return ChatResponse(
@@ -132,40 +151,66 @@ class Assistant:
                     metadata={"error_type": "WORKFLOW_EXECUTION_FAILURE"},
                 )
 
-            display_message = agent_result.message
+            display_message = workflow_result.message
             self.context_manager.add_user_message(session_id, clean_text)
             self.context_manager.add_assistant_message(session_id, display_message)
-            output_dict = agent_result.final_output
+            output_dict = getattr(workflow_result, "final_output", {}) or {}
+            if not output_dict and hasattr(workflow_result, "step_details"):
+                output_dict["steps"] = list(getattr(workflow_result, "step_details", []) or [])
+            if not output_dict.get("steps") and hasattr(workflow_result, "step_details"):
+                output_dict["steps"] = list(getattr(workflow_result, "step_details", []) or [])
+            if hasattr(workflow_result, "status") and hasattr(workflow_result.status, "value"):
+                status_value = workflow_result.status.value
+            else:
+                status_value = str(workflow_result.status)
             return ChatResponse(
-                success=agent_result.success,
+                success=workflow_result.success,
                 type="workflow",
                 message=display_message,
                 tool=None,
                 metadata={
-                    "task_id": agent_result.task_id,
-                    "workflow_id": output_dict.get("workflow_id"),
-                    "name": output_dict.get("workflow_name") or decision.workflow_name,
-                    "status": agent_result.status.value,
-                    "steps_total": agent_result.steps_total,
-                    "steps_completed": agent_result.steps_completed,
-                    "steps_failed": agent_result.steps_failed,
-                    "steps": output_dict.get("steps", []),
-                    "observations": [obs.model_dump() for obs in agent_result.observations],
+                    "task_id": getattr(workflow_result, "task_id", None),
+                    "workflow_id": output_dict.get("workflow_id") or getattr(workflow_result, "workflow_id", None),
+                    "name": output_dict.get("workflow_name") or getattr(workflow_result, "name", None) or decision.workflow_name,
+                    "status": status_value,
+                    "steps_total": getattr(workflow_result, "steps_total", 0),
+                    "steps_completed": getattr(workflow_result, "steps_completed", 0),
+                    "steps_failed": getattr(workflow_result, "steps_failed", 0),
+                    "steps": output_dict.get("steps", getattr(workflow_result, "step_details", [])),
+                    "observations": [obs.model_dump() for obs in getattr(workflow_result, "observations", [])],
                     **output_dict,
                 },
             )
 
-        # 2.5 Agent Execution Path (RYVEN 3.0 Control Plane)
+        # 2.5 Agent & Control Execution Path (RYVEN 3.0 Control Plane)
         if decision.intent == "agent":
-            logger.info(f"[ASSISTANT] Executing agent plan for composite goal: '{clean_text}'")
+            logger.info(f"[ASSISTANT] Executing multi-step agent plan for composite goal: '{clean_text}'")
             agent_result = await self.agent_engine.execute_goal(
                 goal=clean_text,
                 session_id=session_id,
                 auto_confirm=auto_confirm,
             )
-            display_message = agent_result.message
+
+            display_message = getattr(agent_result, "message", "") or "Agent execution completed."
             self.context_manager.add_user_message(session_id, clean_text)
             self.context_manager.add_assistant_message(session_id, display_message)
+
+            status_val = (
+                agent_result.status.value
+                if hasattr(agent_result, "status") and hasattr(agent_result.status, "value")
+                else str(getattr(agent_result, "status", "UNKNOWN"))
+            )
+            control_or_task_id = getattr(agent_result, "control_id", getattr(agent_result, "task_id", None))
+            if not control_or_task_id:
+                import uuid
+                control_or_task_id = f"ctrl-{uuid.uuid4().hex[:8]}"
+
+            control_id = getattr(agent_result, "control_id", None)
+            if not control_id and control_or_task_id:
+                if str(control_or_task_id).startswith("task-"):
+                    control_id = f"ctrl-{str(control_or_task_id)[5:]}"
+                else:
+                    control_id = f"ctrl-{control_or_task_id}"
 
             return ChatResponse(
                 success=agent_result.success,
@@ -173,14 +218,58 @@ class Assistant:
                 message=display_message,
                 tool=None,
                 metadata={
-                    "task_id": agent_result.task_id,
-                    "status": agent_result.status.value,
-                    "steps_total": agent_result.steps_total,
-                    "steps_completed": agent_result.steps_completed,
-                    "steps_failed": agent_result.steps_failed,
-                    "observations": [obs.model_dump() for obs in agent_result.observations],
-                    "duration_ms": agent_result.duration_ms,
-                    **agent_result.final_output,
+                    "task_id": control_or_task_id,
+                    "control_id": control_id,
+                    "status": status_val,
+                    "steps_total": getattr(agent_result, "steps_total", 0),
+                    "steps_completed": getattr(agent_result, "steps_completed", 0),
+                    "steps_failed": getattr(agent_result, "steps_failed", 0),
+                    "observations": [
+                        obs.model_dump() if hasattr(obs, "model_dump") else obs
+                        for obs in getattr(agent_result, "observations", [])
+                    ],
+                    "duration_ms": getattr(agent_result, "duration_ms", 0.0),
+                    **getattr(agent_result, "final_output", {}),
+                },
+            )
+
+        if decision.intent == "control":
+            logger.info(f"[ASSISTANT] Executing control-plane goal for '{clean_text}'")
+            agent_result = await self.control_engine.execute_goal(
+                goal=clean_text,
+                session_id=session_id,
+                auto_confirm=auto_confirm,
+            )
+
+            display_message = agent_result.message
+            self.context_manager.add_user_message(session_id, clean_text)
+            self.context_manager.add_assistant_message(session_id, display_message)
+
+            status_val = (
+                agent_result.status.value
+                if hasattr(agent_result, "status") and hasattr(agent_result.status, "value")
+                else str(getattr(agent_result, "status", "UNKNOWN"))
+            )
+            control_or_task_id = getattr(agent_result, "control_id", getattr(agent_result, "task_id", None))
+
+            return ChatResponse(
+                success=agent_result.success,
+                type="agent",
+                message=display_message,
+                tool=None,
+                metadata={
+                    "task_id": control_or_task_id,
+                    "control_id": control_or_task_id,
+                    "status": status_val,
+                    "steps_total": getattr(agent_result, "steps_total", 0),
+                    "steps_completed": getattr(agent_result, "steps_completed", 0),
+                    "steps_failed": getattr(agent_result, "steps_failed", 0),
+                    "observations": [
+                        obs.model_dump() if hasattr(obs, "model_dump") else obs
+                        for obs in getattr(agent_result, "observations", [])
+                    ],
+                    "duration_ms": getattr(agent_result, "duration_ms", 0.0),
+                    **getattr(agent_result, "final_output", {}),
                 },
             )
 

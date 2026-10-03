@@ -16,7 +16,7 @@ from typing import List, Optional
 from app.actions.event_bus import action_bus
 from app.actions.models import ActionEvent, ActionStatus, ActionType
 from app.core.logging_config import logger
-from app.runtime.checkpoint_store import CheckpointStore, checkpoint_store
+from app.runtime.checkpoint_store import CheckpointStore, checkpoint_store as default_checkpoint_store
 from app.runtime.models import PersistedTaskCheckpoint, RecoveryDecision
 
 
@@ -58,8 +58,12 @@ SAFE_IDEMPOTENT_STEP_TYPES = frozenset(
 class RuntimeRecoveryService:
     """Evaluates and manages task state restoration after crashes or process restarts."""
 
-    def __init__(self, store: Optional[CheckpointStore] = None) -> None:
-        self.store = store or checkpoint_store
+    def __init__(
+        self,
+        store: Optional[CheckpointStore] = None,
+        checkpoint_store: Optional[CheckpointStore] = None,
+    ) -> None:
+        self.store = store or checkpoint_store or default_checkpoint_store
 
     def evaluate_task(self, checkpoint: PersistedTaskCheckpoint) -> RecoveryDecision:
         """Inspect task checkpoint to determine if it is safe to resume or requires confirmation."""

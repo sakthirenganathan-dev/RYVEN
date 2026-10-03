@@ -8,10 +8,11 @@ import { AgentControlPanel } from "@/components/developer/AgentControlPanel";
 import { ModelStatusPanel } from "@/components/developer/ModelStatusPanel";
 import { RuntimePanel } from "@/components/developer/RuntimePanel";
 import { SwarmPanel } from "@/components/developer/SwarmPanel";
+import { ControlPlanePanel } from "@/components/developer/ControlPlanePanel";
 
 const tone = { RUNNING: "signal", READY: "holo", BUILDING: "violet" } as const;
 
-type DeveloperView = "projects" | "activity" | "browser" | "agent" | "models" | "runtime" | "swarm";
+type DeveloperView = "projects" | "activity" | "browser" | "control" | "agent" | "models" | "runtime" | "swarm";
 
 export function DeveloperHUD() {
   const [view, setView] = useState<DeveloperView>("projects");
@@ -56,6 +57,18 @@ export function DeveloperHUD() {
             style={{ fontFamily: "var(--font-mono)" }}
           >
             BROWSER
+          </button>
+          <button
+            type="button"
+            onClick={() => setView("control")}
+            className={`px-2 py-0.5 text-[9px] rounded transition-colors tracking-widest ${
+              view === "control"
+                ? "bg-holo/20 text-holo border border-holo/40"
+                : "text-muted-foreground hover:text-foreground"
+            }`}
+            style={{ fontFamily: "var(--font-mono)" }}
+          >
+            CONTROL
           </button>
           <button
             type="button"
@@ -166,6 +179,9 @@ export function DeveloperHUD() {
 
         {/* Browser Activity view */}
         {view === "browser" && <BrowserActivityPanel />}
+
+        {/* M17.0 Unified Control Plane view */}
+        {view === "control" && <ControlPlanePanel />}
 
         {/* Agent Control Plane view */}
         {view === "agent" && <AgentControlPanel />}

@@ -127,6 +127,11 @@ class AgentRegistry:
         """Retrieve an agent descriptor by role."""
         return self._agents.get(role)
 
+    def get_agents_by_role(self, role: AgentRole) -> List[AgentDescriptor]:
+        """Retrieve all agent descriptors matching a role."""
+        agent = self._agents.get(role)
+        return [agent] if agent else []
+
     def get_agent_by_id(self, agent_id: str) -> Optional[AgentDescriptor]:
         """Retrieve an agent descriptor by its unique agent_id."""
         for desc in self._agents.values():

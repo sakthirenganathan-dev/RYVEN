@@ -1181,6 +1181,202 @@ async def get_agent_events_endpoint(limit: int = 50) -> Dict[str, Any]:
     }
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# M16.1 — Intelligent Planning & Decomposition Endpoints
+# ─────────────────────────────────────────────────────────────────────────────
+
+_cached_plans: Dict[str, Any] = {}
+
+
+@router.post("/planning/preview")
+@router.post("/v1/planning/preview")
+async def planning_preview_endpoint(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Analyze a user goal and produce a preview of the task plan without executing."""
+    from app.agents import PlanningEngine, PlanningRequest, planning_engine
+
+    goal = payload.get("goal") or payload.get("user_goal", "")
+    if not goal:
+        return {"error": "Missing required field: 'goal'"}
+
+    request = PlanningRequest(
+        user_goal=goal,
+        project_name=payload.get("project_name"),
+        context=payload.get("context", {}),
+        preferred_mode=payload.get("preferred_mode"),
+        deadline_sec=payload.get("deadline_sec"),
+    )
+
+    plan_res = await planning_engine.plan(request)
+    _cached_plans[plan_res.plan_id] = plan_res
+    return plan_res.model_dump()
+
+
+@router.post("/planning/validate")
+@router.post("/v1/planning/validate")
+async def planning_validate_endpoint(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Validate a draft list of planning tasks against all 15 safety & DAG rules."""
+    from app.agents import PlanValidator, PlanningTaskDraft
+
+    raw_tasks = payload.get("tasks", [])
+    drafts: List[PlanningTaskDraft] = []
+    for item in raw_tasks:
+        try:
+            drafts.append(PlanningTaskDraft(**item))
+        except Exception as exc:
+            return {"is_valid": False, "errors": [f"Malformed task draft: {exc}"]}
+
+    validator = PlanValidator()
+    result = validator.validate(drafts)
+    return result.model_dump()
+
+
+@router.get("/planning/{plan_id}")
+@router.get("/v1/planning/{plan_id}")
+async def get_plan_endpoint(plan_id: str) -> Dict[str, Any]:
+    """Retrieve details and status for a previously planned execution."""
+    from fastapi import HTTPException
+    if plan_id in _cached_plans:
+        plan = _cached_plans[plan_id]
+        return plan.model_dump() if hasattr(plan, "model_dump") else plan
+    raise HTTPException(status_code=404, detail=f"Plan '{plan_id}' not found.")
+
+
+@router.post("/planning/{plan_id}/execute")
+@router.post("/v1/planning/{plan_id}/execute")
+async def execute_plan_endpoint(plan_id: str, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Execute a previously validated plan through the central AgentCoordinator.
+
+    Builds the AgentTaskGraph and starts execution as a background task,
+    returning immediately with status EXECUTING so callers can poll for progress.
+    """
+    from fastapi import HTTPException
+    from app.agents import agent_coordinator, planning_engine
+    from app.agents.models import AgentStatus
+
+    if plan_id not in _cached_plans:
+        raise HTTPException(status_code=404, detail=f"Plan '{plan_id}' not found.")
+
+    plan_res = _cached_plans[plan_id]
+    auto_confirm = bool((payload or {}).get("auto_confirm", False))
+
+    graph = planning_engine.to_agent_task_graph(plan_res)
+    # Register graph as EXECUTING immediately and fire execution in the background
+    agent_coordinator.start_graph(graph, auto_confirm=auto_confirm)
+    return graph.to_dict()
+
+
+@router.post("/planning/{plan_id}/cancel")
+@router.post("/v1/planning/{plan_id}/cancel")
+async def cancel_plan_endpoint(plan_id: str, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Cancel an active or queued plan."""
+    from app.agents import agent_coordinator
+
+    reason = (payload or {}).get("reason", "Cancelled by user")
+    if plan_id in agent_coordinator._active_graphs:
+        res = await agent_coordinator.cancel_graph(plan_id, reason=reason)
+        return res.to_dict() if res else {"status": "CANCELLED"}
+
+    return {"status": "CANCELLED", "plan_id": plan_id}
+
+
+# ===========================================================================
+# M17.0 Unified Personal Computer & Internet Control Endpoints
+# ===========================================================================
+
+@router.post("/control/execute")
+@router.post("/v1/control/execute")
+async def execute_control_endpoint(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Execute a natural-language goal across Windows desktop, browser, files, or projects."""
+    from fastapi import HTTPException
+    from app.control.engine import ryven_control_engine
+    from app.control.models import ControlRequest
+
+    goal = payload.get("goal") or payload.get("user_goal") or payload.get("message")
+    if not goal or not isinstance(goal, str):
+        raise HTTPException(status_code=400, detail="Missing required 'goal' parameter.")
+
+    req = ControlRequest(
+        goal=goal,
+        project_name=payload.get("project_name"),
+        auto_confirm=bool(payload.get("auto_confirm", False)),
+        timeout=float(payload.get("timeout", 300.0)),
+        session_id=payload.get("session_id", "default"),
+        metadata=payload.get("metadata", {}),
+    )
+
+    result = await ryven_control_engine.execute_goal(req)
+    return result.model_dump()
+
+
+@router.get("/control/{control_id}")
+@router.get("/v1/control/{control_id}")
+async def get_control_status_endpoint(control_id: str) -> Dict[str, Any]:
+    """Retrieve status, observations, and progress of a control execution."""
+    from fastapi import HTTPException
+    from app.control.engine import ryven_control_engine
+
+    res = ryven_control_engine._active_executions.get(control_id)
+    if not res:
+        raise HTTPException(status_code=404, detail=f"Control execution '{control_id}' not found.")
+
+    return res.model_dump()
+
+
+@router.post("/control/{control_id}/confirm")
+@router.post("/v1/control/{control_id}/confirm")
+async def confirm_control_endpoint(control_id: str, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Provide user confirmation for a paused consequential action."""
+    from fastapi import HTTPException
+    from app.control.engine import ryven_control_engine
+
+    token = (payload or {}).get("confirmation_token")
+    auto_confirm_rest = bool((payload or {}).get("auto_confirm_rest", False))
+    res = await ryven_control_engine.confirm_control(control_id, confirmation_token=token, auto_confirm_rest=auto_confirm_rest)
+    if not res:
+        raise HTTPException(status_code=404, detail=f"Control execution '{control_id}' not found.")
+
+    return res.model_dump()
+
+
+@router.post("/control/{control_id}/cancel")
+@router.post("/v1/control/{control_id}/cancel")
+async def cancel_control_endpoint(control_id: str, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Cancel an active control execution."""
+    from app.control.engine import ryven_control_engine
+
+    reason = (payload or {}).get("reason", "User requested cancellation")
+    canceled = await ryven_control_engine.cancel_control(control_id, reason=reason)
+    return {"control_id": control_id, "status": "CANCELLED", "success": canceled is not None}
+
+
+@router.get("/control/applications/running")
+@router.get("/v1/control/applications/running")
+async def get_running_applications_endpoint() -> Dict[str, Any]:
+    """Inspect active approved desktop applications."""
+    from app.control.observer import observer_engine
+
+    obs = await observer_engine.observe_applications()
+    processes = obs.details.get("processes", [])
+    count = obs.details.get("count", len(processes))
+    return {
+        "status": "ok",
+        "count": count,
+        "processes": processes,
+        "summary": obs.summary,
+        "observation": obs.model_dump(),
+    }
+
+
+@router.get("/control/permissions/catalog")
+@router.get("/v1/control/permissions/catalog")
+async def get_permissions_catalog_endpoint() -> Dict[str, Any]:
+    """Return categorized tool permissions and consequential boundary rules."""
+    from app.control.permissions import permission_manager
+
+    return permission_manager.get_permission_catalog()
+
+
+
 
 
 

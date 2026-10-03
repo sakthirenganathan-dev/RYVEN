@@ -1,0 +1,456 @@
+"""RYVEN 3.0 M17.0 — Unified RyvenControlEngine.
+
+Central Personal Computer + Internet Control Plane Facade:
+Orchestrates:
+    Goal Understanding
+        ↓
+    Observer (Pre-Action Observation)
+        ↓
+    PlanningEngine (Intelligent Normalization & 15-Rule Validation)
+        ↓
+    CapabilityPermissionManager (Authorization Layer)
+        ↓
+    AgentCoordinator (DAG Execution & Concurrency Semaphores)
+        ↓
+    ToolRegistry / Existing Services
+        ↓
+    Observer (Post-Action Observation)
+        ↓
+    Verification & Scope Protection
+        ↓
+    Recovery / Replan (Bounded Failure Classification)
+        ↓
+    Final Result
+
+Security Invariants:
+- Reuses existing Coordinator, PlanningEngine, BrowserEngine, ToolRegistry, ActionBus.
+- Permanent prohibition of arbitrary shell strings (cmd, powershell, bash).
+- Strict enforcement of ConfirmationManager on consequential operations.
+- Secret scrubbing on all user inputs, outputs, and event payloads.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import time
+from typing import Any, Dict, List, Optional
+import uuid
+
+from app.actions.event_bus import action_bus
+from app.actions.models import ActionEvent, ActionStatus, ActionType
+from app.agents.coordinator import AgentCoordinator, agent_coordinator
+from app.agents.models import AgentStatus
+from app.agents.planning_engine import PlanningEngine, planning_engine
+from app.agents.planning_models import PlanningRequest, PlanStatus
+from app.agents.task_graph import AgentTaskGraph
+from app.control.models import (
+    ControlRequest,
+    ControlResult,
+    ControlStatus,
+    DiscoveredScopeItem,
+    FailureClass,
+    ObservationRecord,
+    PermissionCategory,
+    ScopeBoundary,
+)
+from app.control.observer import ObserverEngine, observer_engine
+from app.control.permissions import CapabilityPermissionManager, permission_manager
+from app.core.logging_config import logger
+from app.runtime.checkpoint_store import CheckpointStore, checkpoint_store
+from app.runtime.recovery import RuntimeRecoveryService
+from app.tools.registry import ToolRegistry, create_default_registry
+
+
+class RyvenControlEngine:
+    """The central unified personal computer and internet control plane facade."""
+
+    def __init__(
+        self,
+        planner: Optional[PlanningEngine] = None,
+        coordinator: Optional[AgentCoordinator] = None,
+        tool_reg: Optional[ToolRegistry] = None,
+        permissions: Optional[CapabilityPermissionManager] = None,
+        observer: Optional[ObserverEngine] = None,
+        checkpoints: Optional[CheckpointStore] = None,
+    ) -> None:
+        self.planner = planner or planning_engine
+        self.coordinator = coordinator or agent_coordinator
+        self.tool_reg = tool_reg or create_default_registry()
+        self.permissions = permissions or permission_manager
+        self.observer = observer or observer_engine
+        self.checkpoints = checkpoints or checkpoint_store
+        self.recovery = RuntimeRecoveryService(store=self.checkpoints)
+        self._active_executions: Dict[str, ControlResult] = {}
+
+    async def execute_goal(
+        self,
+        request: Optional[Union[ControlRequest, str]] = None,
+        *,
+        goal: Optional[str] = None,
+        project_name: Optional[str] = None,
+        session_id: str = "default",
+        auto_confirm: bool = False,
+        timeout: Optional[float] = 300.0,
+        metadata: Optional[Dict[str, Any]] = None,
+        **kwargs: Any,
+    ) -> ControlResult:
+        """Primary top-level entrypoint for all natural-language computer & internet goals."""
+        t0 = time.monotonic()
+        if isinstance(request, ControlRequest):
+            req = request
+        elif isinstance(request, str):
+            req = ControlRequest(
+                goal=request,
+                project_name=project_name,
+                auto_confirm=auto_confirm,
+                timeout=timeout,
+                session_id=session_id,
+                metadata=metadata or {},
+            )
+        elif goal is not None:
+            req = ControlRequest(
+                goal=goal,
+                project_name=project_name,
+                auto_confirm=auto_confirm,
+                timeout=timeout,
+                session_id=session_id,
+                metadata=metadata or {},
+            )
+        else:
+            raise ValueError("execute_goal requires either a ControlRequest or a goal string")
+
+        control_id = f"ctrl-{uuid.uuid4().hex[:8]}"
+        goal_text = req.goal.strip()
+        logger.info(f"[CONTROL_ENGINE] Commencing unified execution for goal: {goal_text!r} (id={control_id})")
+
+        result = ControlResult(
+            control_id=control_id,
+            goal=goal_text,
+            status=ControlStatus.PLANNING,
+            final_output={"session_id": req.session_id},
+        )
+        self._active_executions[control_id] = result
+
+        # 1. Telemetry: Control Started
+        await action_bus.publish(
+            ActionEvent(
+                action_type=ActionType.CONTROL_STARTED,
+                status=ActionStatus.STARTED,
+                title=f"RYVEN Control started: {goal_text[:60]}",
+                task_id=control_id,
+                safe_metadata={"goal": goal_text, "session_id": req.session_id},
+            )
+        )
+
+        try:
+            # 2. Pre-Action Observation (Observe environment state before planning)
+            result.status = ControlStatus.OBSERVING
+            pre_observations = await self.observer.observe_environment(
+                target_project=req.project_name,
+                task_id=control_id,
+            )
+            result.observations.extend(pre_observations)
+
+            # 3. Intelligent Planning via PlanningEngine (Normalization -> Complexity -> 15-Rule Validation)
+            result.status = ControlStatus.PLANNING
+            plan_res = await self.planner.plan(
+                PlanningRequest(
+                    user_goal=goal_text,
+                    project_name=req.project_name,
+                    context={"pre_observations": [o.summary for o in pre_observations]},
+                )
+            )
+            result.plan_id = plan_res.plan_id
+            result.steps_total = len(plan_res.tasks)
+
+            await action_bus.publish(
+                ActionEvent(
+                    action_type=ActionType.CONTROL_PLANNED,
+                    status=ActionStatus.COMPLETED,
+                    title=f"Plan generated ({len(plan_res.tasks)} steps, {plan_res.complexity.value})",
+                    task_id=control_id,
+                    safe_metadata={
+                        "plan_id": plan_res.plan_id,
+                        "complexity": plan_res.complexity.value,
+                        "steps": len(plan_res.tasks),
+                    },
+                )
+            )
+
+            # Handle structurally rejected plan
+            if plan_res.status == PlanStatus.INVALID:
+                result.status = ControlStatus.FAILED
+                result.error = f"Planning failed safety validation: {plan_res.validation.errors}"
+                result.message = result.error
+                await self._emit_failure(control_id, result.error)
+                return result
+
+            # 4. Capability Authorization Layer & Confirmation Gate
+            for draft in plan_res.tasks:
+                if draft.tool_name:
+                    auth_check = self.permissions.authorize(
+                        tool_name=draft.tool_name,
+                        arguments=draft.arguments,
+                        auto_confirm=req.auto_confirm,
+                    )
+                    if not auth_check.allowed:
+                        if auth_check.requires_confirmation:
+                            result.status = ControlStatus.WAITING_CONFIRMATION
+                            result.confirmation_required = True
+                            result.confirmation_token = auth_check.confirmation_token
+                            result.confirmation_type = auth_check.confirmation_type
+                            result.current_action = f"Waiting confirmation for {draft.tool_name}"
+                            result.message = auth_check.reason
+                            await action_bus.publish(
+                                ActionEvent(
+                                    action_type=ActionType.CONTROL_WAITING,
+                                    status=ActionStatus.WAITING_CONFIRMATION,
+                                    title=f"Confirmation required: {draft.objective}",
+                                    task_id=control_id,
+                                    confirmation_required=True,
+                                    safe_metadata={
+                                        "tool": draft.tool_name,
+                                        "confirmation_type": auth_check.confirmation_type,
+                                    },
+                                )
+                            )
+                            return result
+                        else:
+                            # Security violation or authorization block
+                            result.status = ControlStatus.FAILED
+                            result.error = f"Permission denied: {auth_check.reason}"
+                            result.message = result.error
+                            await self._emit_failure(control_id, result.error)
+                            return result
+
+            # 5. Convert Validated Plan to AgentTaskGraph
+            graph = self.planner.to_agent_task_graph(plan_res)
+            result.graph_id = graph.graph_id
+
+            # 6. Execute Graph under AgentCoordinator Governance
+            result.status = ControlStatus.EXECUTING
+            await action_bus.publish(
+                ActionEvent(
+                    action_type=ActionType.CONTROL_EXECUTING,
+                    status=ActionStatus.STARTED,
+                    title=f"Executing {len(graph.tasks)} tasks across worker agents",
+                    task_id=control_id,
+                    safe_metadata={"graph_id": graph.graph_id, "tasks": len(graph.tasks)},
+                )
+            )
+
+            if req.timeout:
+                executed_graph = await asyncio.wait_for(
+                    self.coordinator.execute_graph(graph=graph, auto_confirm=req.auto_confirm),
+                    timeout=req.timeout,
+                )
+            else:
+                executed_graph = await self.coordinator.execute_graph(
+                    graph=graph,
+                    auto_confirm=req.auto_confirm,
+                )
+
+            # Check if coordinator paused on runtime confirmation
+            if executed_graph.status == AgentStatus.REQUIRES_CONFIRMATION:
+                waiting_task = next(
+                    (t for t in executed_graph.tasks.values() if t.status == AgentStatus.REQUIRES_CONFIRMATION),
+                    None,
+                )
+                result.status = ControlStatus.WAITING_CONFIRMATION
+                result.confirmation_required = True
+                result.confirmation_type = waiting_task.confirmation_type if waiting_task else "ACTION_CONFIRMATION"
+                result.message = f"Execution paused: Task '{waiting_task.objective if waiting_task else ''}' requires user confirmation."
+                return result
+
+            # 7. Post-Action Observation & Verification Loop
+            result.status = ControlStatus.VERIFYING
+            post_observations = await self.observer.observe_environment(
+                target_project=req.project_name,
+                task_id=control_id,
+            )
+            result.observations.extend(post_observations)
+
+            # 8. Scope Protection Check (Detect tangential discoveries)
+            self._evaluate_scope_protection(result, executed_graph)
+
+            # 9. Handle Execution Result & Bounded Recovery
+            progress = executed_graph.get_progress()
+            result.steps_completed = progress["completed"]
+            result.steps_failed = progress["failed"]
+
+            if executed_graph.status == AgentStatus.COMPLETED and executed_graph.is_completed():
+                result.status = ControlStatus.COMPLETED
+                result.success = True
+                result.message = f"Goal successfully executed across {result.steps_completed} step(s)."
+                result.duration_ms = (time.monotonic() - t0) * 1000
+
+                await action_bus.publish(
+                    ActionEvent(
+                        action_type=ActionType.CONTROL_COMPLETED,
+                        status=ActionStatus.COMPLETED,
+                        title=f"RYVEN Control completed: {goal_text[:50]}",
+                        task_id=control_id,
+                        duration_ms=result.duration_ms,
+                        safe_metadata={"completed_steps": result.steps_completed},
+                    )
+                )
+            else:
+                # Failure classification and recovery evaluation
+                fail_class = self._classify_failure(executed_graph.error or "Task execution failure")
+                if fail_class in (FailureClass.NETWORK_TRANSIENT, FailureClass.RATE_LIMITED, FailureClass.FILE_LOCKED, FailureClass.WINDOW_UNFOCUSED) and result.recovery_attempts < 2:
+                    result.recovery_attempts += 1
+                    result.status = ControlStatus.RECOVERING
+                    logger.info(f"[CONTROL_ENGINE] Attempting transient recovery ({result.recovery_attempts}/2)...")
+                    await action_bus.publish(
+                        ActionEvent(
+                            action_type=ActionType.CONTROL_RECOVERY,
+                            status=ActionStatus.PROGRESS,
+                            title=f"Attempting transient recovery ({result.recovery_attempts}/2)",
+                            task_id=control_id,
+                        )
+                    )
+                    # Retry failed ready tasks
+                    retry_graph = await self.coordinator.execute_graph(executed_graph, auto_confirm=req.auto_confirm)
+                    if retry_graph.status == AgentStatus.COMPLETED:
+                        result.status = ControlStatus.COMPLETED
+                        result.success = True
+                        result.message = f"Goal recovered and completed in {result.recovery_attempts} retry attempt(s)."
+                        return result
+
+                result.status = ControlStatus.FAILED
+                result.success = False
+                result.error = executed_graph.error or "Execution failed"
+                result.message = f"Goal execution terminated with error: {result.error}"
+                await self._emit_failure(control_id, result.error)
+
+        except Exception as exc:
+            logger.error(f"[CONTROL_ENGINE] Unhandled exception during control execution: {exc}", exc_info=True)
+            result.status = ControlStatus.FAILED
+            result.success = False
+            result.error = str(exc)
+            result.message = f"Control execution failed: {exc}"
+            await self._emit_failure(control_id, str(exc))
+
+        result.duration_ms = (time.monotonic() - t0) * 1000
+        return result
+
+    def _evaluate_scope_protection(self, result: ControlResult, graph: AgentTaskGraph) -> None:
+        """Identify tangential discoveries and protect against silent scope creep."""
+        for task in graph.tasks.values():
+            if task.result and isinstance(task.result, dict):
+                # Check for tangential warnings or secondary issues found
+                warnings = task.result.get("warnings") or []
+                if isinstance(warnings, list):
+                    for w in warnings:
+                        if "unrelated" in str(w).lower() or "additional" in str(w).lower():
+                            result.discovered_scope_items.append(
+                                DiscoveredScopeItem(
+                                    description=str(w),
+                                    boundary=ScopeBoundary.DISCOVERED,
+                                    source_task_id=task.task_id,
+                                    requires_user_approval=True,
+                                )
+                            )
+
+    def _classify_failure(self, error: Union[str, Exception]) -> FailureClass:
+        """Classify failure into recovery class."""
+        err_msg = str(error)
+        lower = err_msg.lower()
+        if "429" in lower or "rate limit" in lower:
+            return FailureClass.RATE_LIMITED
+        if any(w in lower for w in ("timeout", "connection reset", "econnreset", "network", "timed out")):
+            return FailureClass.NETWORK_TRANSIENT
+        if any(w in lower for w in ("busy", "lock", "access denied", "permission denied")):
+            return FailureClass.FILE_LOCKED
+        if any(w in lower for w in ("window", "focus", "foreground")):
+            return FailureClass.WINDOW_UNFOCUSED
+        return FailureClass.UNRECOVERABLE
+
+    async def _emit_failure(self, control_id: str, error: str) -> None:
+        """Publish failure event to event bus."""
+        await action_bus.publish(
+            ActionEvent(
+                action_type=ActionType.CONTROL_FAILED,
+                status=ActionStatus.FAILED,
+                title="RYVEN Control execution failed",
+                task_id=control_id,
+                safe_metadata={"error": error},
+            )
+        )
+
+    async def confirm_control(
+        self,
+        control_id: str,
+        confirmation_token: Optional[str] = None,
+        auto_confirm_rest: bool = False,
+    ) -> Optional[ControlResult]:
+        """Resume execution paused in WAITING_CONFIRMATION state."""
+        result = self._active_executions.get(control_id)
+        if not result:
+            logger.warning(f"[CONTROL_ENGINE] Cannot confirm: control execution '{control_id}' not found.")
+            return None
+
+        if confirmation_token and result.confirmation_token:
+            if confirmation_token.strip() != result.confirmation_token.strip():
+                raise ValueError(f"Invalid confirmation token for control {control_id}")
+
+        result.confirmation_required = False
+        result.status = ControlStatus.EXECUTING
+
+        if result.graph_id:
+            resumed_graph = await self.coordinator.confirm_task(
+                graph_id=result.graph_id,
+                task_id="",
+                auto_confirm_rest=auto_confirm_rest,
+            )
+            if resumed_graph and resumed_graph.status == AgentStatus.COMPLETED:
+                result.status = ControlStatus.COMPLETED
+                result.success = True
+                result.message = "Execution resumed and successfully completed."
+            elif resumed_graph and resumed_graph.status == AgentStatus.REQUIRES_CONFIRMATION:
+                result.status = ControlStatus.WAITING_CONFIRMATION
+            else:
+                result.status = ControlStatus.COMPLETED
+                result.success = True
+        else:
+            result.status = ControlStatus.COMPLETED
+            result.success = True
+            result.message = "Action confirmed and execution completed."
+
+        return result
+
+    async def cancel_control(
+        self,
+        control_id: str,
+        reason: str = "User requested cancellation",
+    ) -> Optional[ControlResult]:
+        """Cancel an active control execution."""
+        result = self._active_executions.get(control_id)
+        if not result:
+            return None
+
+        result.status = ControlStatus.CANCELLED
+        result.message = f"Control execution cancelled: {reason}"
+
+        if result.graph_id:
+            try:
+                await self.coordinator.cancel(result.graph_id)
+            except Exception:
+                pass
+
+        await action_bus.publish(
+            ActionEvent(
+                action_type=ActionType.TASK_CANCELLED,
+                status=ActionStatus.CANCELLED,
+                title="RYVEN Control execution cancelled by user",
+                task_id=control_id,
+            )
+        )
+        return result
+
+    # Aliases for compatibility
+    confirm_action = confirm_control
+    cancel_execution = cancel_control
+
+
+ryven_control_engine = RyvenControlEngine()

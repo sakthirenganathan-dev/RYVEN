@@ -111,6 +111,7 @@ class AgentEngine:
         self,
         goal: str,
         session_id: str = "default",
+        auto_confirm: bool = False,
     ) -> AgentExecutionResult:
         """Adapt an existing validated workflow plan to the unified agent executor."""
         workflow = self.workflow_engine.plan_workflow(goal)
@@ -155,7 +156,7 @@ class AgentEngine:
         result = await self.orchestrator.execute_plan(
             plan=plan,
             session_id=session_id,
-            auto_confirm=False,
+            auto_confirm=auto_confirm,
         )
         result.final_output.update(
             {

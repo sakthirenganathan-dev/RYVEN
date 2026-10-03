@@ -197,8 +197,35 @@ class ActionType(str, Enum):
     AGENT_GRAPH_COMPLETED = "AGENT_GRAPH_COMPLETED"
     AGENT_GRAPH_FAILED = "AGENT_GRAPH_FAILED"
 
+    # Intelligent Planning & Decomposition (M16.1)
+    PLAN_CREATED = "PLAN_CREATED"
+    PLAN_VALIDATION_STARTED = "PLAN_VALIDATION_STARTED"
+    PLAN_VALIDATED = "PLAN_VALIDATED"
+    PLAN_INVALID = "PLAN_INVALID"
+    PLAN_REPAIR_STARTED = "PLAN_REPAIR_STARTED"
+    PLAN_REPAIRED = "PLAN_REPAIRED"
+    PLAN_REPAIR_FAILED = "PLAN_REPAIR_FAILED"
+    PLAN_EXECUTION_READY = "PLAN_EXECUTION_READY"
+    PLAN_REVISED = "PLAN_REVISED"
+
+    # Unified Computer & Internet Control Plane (M17.0)
+    CONTROL_STARTED = "CONTROL_STARTED"
+    CONTROL_PLANNED = "CONTROL_PLANNED"
+    CONTROL_EXECUTING = "CONTROL_EXECUTING"
+    CONTROL_OBSERVING = "CONTROL_OBSERVING"
+    CONTROL_WAITING = "CONTROL_WAITING"
+    CONTROL_RECOVERY = "CONTROL_RECOVERY"
+    CONTROL_REPLANNING = "CONTROL_REPLANNING"
+    CONTROL_VERIFIED = "CONTROL_VERIFIED"
+    CONTROL_COMPLETED = "CONTROL_COMPLETED"
+    CONTROL_FAILED = "CONTROL_FAILED"
+
     # Unknown / fallback
     UNKNOWN = "UNKNOWN"
+
+
+# Alias for backward and planning compatibility
+ActionEventType = ActionType
 
 
 # ---------------------------------------------------------------------------
@@ -241,6 +268,10 @@ class ActionEvent(BaseModel):
         """Return a copy of this event with safe (redacted) metadata."""
         self.safe_metadata = _redact_dict(raw)
         return self
+
+    @property
+    def type(self) -> ActionType:
+        return self.action_type
 
     def model_post_init(self, __context: Any) -> None:
         """Ensure safe_metadata is always redacted on construction."""

@@ -35,7 +35,6 @@ CONSEQUENTIAL_TOOLS = frozenset({
     "browser_delete",
 })
 
-# Forbidden tool patterns (arbitrary shell, raw terminal execution)
 FORBIDDEN_TOOLS = frozenset({
     "bash",
     "sh",
@@ -45,7 +44,9 @@ FORBIDDEN_TOOLS = frozenset({
     "shell_exec",
     "eval",
     "system_exec",
+    "run_terminal_command",
 })
+FORBIDDEN_SHELL_TOOLS = FORBIDDEN_TOOLS
 
 
 class SecurityCheckResult(BaseModel):

@@ -38,6 +38,25 @@ from app.agents.security import AgentSecurityPolicy, SecurityCheckResult, agent_
 from app.agents.communication import CommunicationManager, communication_manager
 from app.agents.coordinator import AgentCoordinator, agent_coordinator
 
+from app.agents.planning_models import (
+    ExtractedIntent,
+    GoalComplexity,
+    PlanRisk,
+    PlanStatus,
+    PlanValidationResult,
+    PlanningMode,
+    PlanningRequest,
+    PlanningResult,
+    PlanningTaskDraft,
+)
+from app.agents.normalizer import GoalNormalizer, goal_normalizer
+from app.agents.complexity import ComplexityClassifier, complexity_classifier
+from app.agents.intent import IntentAnalyzer, intent_analyzer
+from app.agents.dependency_analyzer import DependencyAndRiskAnalyzer, dependency_risk_analyzer
+from app.agents.validator import PlanRepairEngine, PlanValidator, plan_repair_engine, plan_validator
+from app.agents.llm_planner import LLMPlanner, llm_planner
+from app.agents.planning_engine import PlanningEngine, planning_engine
+
 __all__ = [
     # Constants
     "MAX_ACTIVE_AGENTS",
@@ -59,6 +78,16 @@ __all__ = [
     "MemoryContext",
     "MemoryWriteCandidate",
     "redact_secrets",
+    # Planning Models (M16.1)
+    "GoalComplexity",
+    "PlanningMode",
+    "PlanRisk",
+    "PlanStatus",
+    "PlanningRequest",
+    "PlanningResult",
+    "PlanValidationResult",
+    "PlanningTaskDraft",
+    "ExtractedIntent",
     # Capabilities
     "CAPABILITY_TOOL_MAP",
     "ROLE_CAPABILITIES",
@@ -73,6 +102,23 @@ __all__ = [
     # Task Graph & Planner
     "AgentTaskGraph",
     "TaskDecomposer",
+    # Planning Engine Components (M16.1)
+    "GoalNormalizer",
+    "goal_normalizer",
+    "ComplexityClassifier",
+    "complexity_classifier",
+    "IntentAnalyzer",
+    "intent_analyzer",
+    "DependencyAndRiskAnalyzer",
+    "dependency_risk_analyzer",
+    "LLMPlanner",
+    "llm_planner",
+    "PlanValidator",
+    "plan_validator",
+    "PlanRepairEngine",
+    "plan_repair_engine",
+    "PlanningEngine",
+    "planning_engine",
     # Security & Communication
     "SecurityCheckResult",
     "AgentSecurityPolicy",

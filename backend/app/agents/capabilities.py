@@ -43,6 +43,9 @@ CAPABILITY_TOOL_MAP: Dict[AgentCapability, List[str]] = {
     AgentCapability.WINDOWS_APP: [
         "open_application",
         "open_website",
+        "inspect_applications",
+        "focus_application",
+        "close_application",
     ],
     AgentCapability.WINDOWS_FILES: [
         "search_files",

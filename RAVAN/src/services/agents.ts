@@ -116,3 +116,195 @@ export async function cancelAgentGraph(
   }
   return res.json();
 }
+
+export interface PlanningDraftTask {
+  task_id: string;
+  objective: string;
+  capability: string;
+  preferred_role?: string;
+  tool_name?: string;
+  arguments: Record<string, unknown>;
+  depends_on: string[];
+  requires_confirmation: boolean;
+  confirmation_type?: string;
+  risk: string;
+}
+
+export interface PlanningResultData {
+  plan_id: string;
+  raw_goal: string;
+  normalized_goal: string;
+  complexity: "SIMPLE" | "MODERATE" | "COMPLEX";
+  planning_mode: "DIRECT" | "DETERMINISTIC" | "LLM_ASSISTED" | "HYBRID";
+  tasks: PlanningDraftTask[];
+  dependencies: Record<string, string[]>;
+  parallel_groups: string[][];
+  overall_risk: "SAFE" | "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
+  requires_confirmation: boolean;
+  confirmation_points: string[];
+  estimated_steps: number;
+  estimated_parallelism: number;
+  explanation: string;
+  warnings: string[];
+  status: string;
+}
+
+export async function fetchPlanPreview(
+  goal: string,
+  projectName?: string
+): Promise<PlanningResultData> {
+  const res = await fetch(`${RYVEN_API_BASE_URL}/api/planning/preview`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ goal, project_name: projectName }),
+  });
+  if (!res.ok) {
+    throw new Error(`Failed to generate plan preview: ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function executePlan(
+  planId: string,
+  autoConfirm: boolean = false
+): Promise<TaskGraphData> {
+  const res = await fetch(`${RYVEN_API_BASE_URL}/api/planning/${planId}/execute`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ auto_confirm: autoConfirm }),
+  });
+  if (!res.ok) {
+    throw new Error(`Failed to execute plan: ${res.status}`);
+  }
+  return res.json();
+}
+
+// ---------------------------------------------------------------------------
+// M17.0 Full Computer & Internet Control Plane Service
+// ---------------------------------------------------------------------------
+
+export interface ObservationRecordData {
+  observation_id: string;
+  timestamp: string;
+  source: string;
+  title: string;
+  details: Record<string, unknown>;
+  summary: string;
+  url?: string;
+  app_name?: string;
+  project_name?: string;
+  success: boolean;
+  error?: string;
+}
+
+export interface DiscoveredScopeItemData {
+  item_id: string;
+  description: string;
+  boundary: "CORE" | "DISCOVERED" | "OPTIONAL";
+  source_task_id?: string;
+  requires_user_approval: boolean;
+  approved: boolean;
+  details: Record<string, unknown>;
+}
+
+export interface ControlResultData {
+  control_id: string;
+  goal: string;
+  status:
+    | "IDLE"
+    | "OBSERVING"
+    | "PLANNING"
+    | "AUTHORIZING"
+    | "WAITING_CONFIRMATION"
+    | "EXECUTING"
+    | "RECOVERING"
+    | "VERIFYING"
+    | "COMPLETED"
+    | "FAILED"
+    | "CANCELLED";
+  success: boolean;
+  plan_id?: string;
+  graph_id?: string;
+  steps_total: number;
+  steps_completed: number;
+  steps_failed: number;
+  active_agent?: string;
+  current_action?: string;
+  current_application?: string;
+  current_website?: string;
+  observations: ObservationRecordData[];
+  discovered_scope_items: DiscoveredScopeItemData[];
+  recovery_attempts: number;
+  confirmation_required: boolean;
+  confirmation_token?: string;
+  confirmation_type?: string;
+  message: string;
+  error?: string;
+  final_output: Record<string, unknown>;
+  duration_ms: number;
+}
+
+export async function executeControlGoal(
+  goal: string,
+  projectName?: string,
+  autoConfirm: boolean = false
+): Promise<ControlResultData> {
+  const res = await fetch(`${RYVEN_API_BASE_URL}/api/control/execute`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ goal, project_name: projectName, auto_confirm: autoConfirm }),
+  });
+  if (!res.ok) {
+    throw new Error(`Failed to execute control goal: ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function fetchControlStatus(controlId: string): Promise<ControlResultData> {
+  const res = await fetch(`${RYVEN_API_BASE_URL}/api/control/${controlId}`);
+  if (!res.ok) {
+    throw new Error(`Failed to fetch control status: ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function confirmControl(
+  controlId: string,
+  confirmationToken: string
+): Promise<ControlResultData> {
+  const res = await fetch(`${RYVEN_API_BASE_URL}/api/control/${controlId}/confirm`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ confirmation_token: confirmationToken }),
+  });
+  if (!res.ok) {
+    throw new Error(`Failed to confirm control: ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function cancelControl(
+  controlId: string,
+  reason: string = "User cancelled"
+): Promise<ControlResultData> {
+  const res = await fetch(`${RYVEN_API_BASE_URL}/api/control/${controlId}/cancel`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ reason }),
+  });
+  if (!res.ok) {
+    throw new Error(`Failed to cancel control: ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function fetchRunningApplications(): Promise<{
+  count: number;
+  processes: Array<{ name: string; pid: number; title: string }>;
+}> {
+  const res = await fetch(`${RYVEN_API_BASE_URL}/api/control/applications/running`);
+  if (!res.ok) {
+    throw new Error(`Failed to fetch running applications: ${res.status}`);
+  }
+  return res.json();
+}

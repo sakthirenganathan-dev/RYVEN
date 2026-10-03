@@ -211,6 +211,15 @@ class SafetyGuard:
             "web_upload",
             "web_verify_download",
             "web_verify_upload",
+            # M17 Process tools & browser vision/OCR & aliases
+            "inspect_applications",
+            "focus_application",
+            "close_application",
+            "browser_screenshot",
+            "page_ocr",
+            "read_file",
+            "web_search",
+            "fetch_web_content",
         }
 
 

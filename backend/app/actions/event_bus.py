@@ -11,6 +11,7 @@ Design principles:
 from __future__ import annotations
 
 import asyncio
+import inspect
 from collections import deque
 from typing import Any, Callable, Coroutine, Dict, List, Optional
 
@@ -91,14 +92,21 @@ class ActionEventBus:
     # Subscription management
     # -----------------------------------------------------------------------
 
-    def subscribe(self, fn: SubscriberFn) -> str:
-        """Register an async subscriber callback.
+    def subscribe(self, fn: Callable) -> str:
+        """Register a subscriber callback (sync or async).
 
         Returns a subscriber ID that can be used to unsubscribe.
+        Sync callables are automatically wrapped to satisfy the async interface.
         """
         self._counter += 1
         sid = f"sub-{self._counter}"
-        self._subscribers[sid] = fn
+        if inspect.iscoroutinefunction(fn):
+            self._subscribers[sid] = fn
+        else:
+            # Wrap sync callable so it satisfies the async subscriber interface
+            async def _sync_wrapper(evt: "ActionEvent", _fn: Callable = fn) -> None:
+                _fn(evt)
+            self._subscribers[sid] = _sync_wrapper
         logger.debug(f"[ACTION_BUS] New subscriber: {sid} (total={len(self._subscribers)})")
         return sid
 

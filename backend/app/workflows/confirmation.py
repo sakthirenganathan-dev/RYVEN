@@ -75,11 +75,17 @@ class ConfirmationManager:
         # M15 Internet & Web Inspection tools (safe read-only)
         "internet_search",
         "web_research",
+        "web_search",
+        "fetch_web_content",
         "web_verify",
         "browser_tabs",
         "browser_snapshot",
         "browser_screenshot",
         "page_ocr",
+        # M17 Desktop Process and General Read tools
+        "read_file",
+        "inspect_applications",
+        "focus_application",
     }
 
     # Categories requiring explicit user confirmation
@@ -97,7 +103,36 @@ class ConfirmationManager:
         "browser_submit_form",
         "browser_download",
         "browser_delete",
+        "close_application",
+        "apply_project_modification",
+        "form_submit",
+        "web_download",
     }
+
+    def __init__(self) -> None:
+        self._pending_tokens: Dict[str, Dict[str, Any]] = {}
+
+    def request_confirmation(self, action_name: str, parameters: Optional[Dict[str, Any]] = None) -> str:
+        """Create and track a confirmation token for an impactful action."""
+        import uuid
+        token = f"CONF-{uuid.uuid4().hex[:8].upper()}"
+        self._pending_tokens[token] = {
+            "action_name": action_name,
+            "parameters": parameters or {},
+            "confirmed": False,
+        }
+        return token
+
+    def confirm(self, token: str) -> bool:
+        """Mark a confirmation token as confirmed."""
+        if token in self._pending_tokens:
+            self._pending_tokens[token]["confirmed"] = True
+            return True
+        return False
+
+    def is_token_confirmed(self, token: str) -> bool:
+        """Check if a token has been confirmed."""
+        return self._pending_tokens.get(token, {}).get("confirmed", False)
 
 
     def requires_confirmation(self, step_or_tool: Any, arguments: Optional[Dict[str, Any]] = None) -> bool:

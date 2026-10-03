@@ -4,14 +4,19 @@ import {
   submitAgentGoal,
   confirmAgentTask,
   cancelAgentGraph,
+  fetchPlanPreview,
+  executePlan,
   type AgentDescriptor,
   type TaskGraphData,
+  type PlanningResultData,
+  type PlanningDraftTask,
 } from "@/services/agents";
 import { StatusIndicator } from "@/components/hud/StatusIndicator";
 
 export function SwarmPanel() {
   const [agents, setAgents] = useState<AgentDescriptor[]>([]);
   const [activeGraph, setActiveGraph] = useState<TaskGraphData | null>(null);
+  const [planPreview, setPlanPreview] = useState<PlanningResultData | null>(null);
   const [goalInput, setGoalInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -42,9 +47,40 @@ export function SwarmPanel() {
     try {
       const graph = await submitAgentGoal(goalInput.trim());
       setActiveGraph(graph);
+      setPlanPreview(null);
       setGoalInput("");
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Failed to coordinate task");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handlePreview = async () => {
+    if (!goalInput.trim() || loading) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const preview = await fetchPlanPreview(goalInput.trim());
+      setPlanPreview(preview);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Failed to generate plan preview");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleExecutePlan = async () => {
+    if (!planPreview || loading) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const graph = await executePlan(planPreview.plan_id);
+      setActiveGraph(graph);
+      setPlanPreview(null);
+      setGoalInput("");
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Failed to execute plan");
     } finally {
       setLoading(false);
     }
@@ -86,7 +122,7 @@ export function SwarmPanel() {
         <div className="flex items-center justify-between">
           <span className="text-foreground tracking-widest text-[9px]">AGENT COORDINATION HUD</span>
           <StatusIndicator
-            label={activeGraph?.status ?? "READY"}
+            label={activeGraph?.status ?? (planPreview ? "PLAN_READY" : "READY")}
             tone={getStatusTone(activeGraph?.status ?? "READY")}
             pulse={activeGraph?.status === "RUNNING"}
           />
@@ -95,13 +131,13 @@ export function SwarmPanel() {
           <span className="text-sm font-bold text-holo" style={{ fontFamily: "var(--font-display)" }}>
             RYVEN SWARM
           </span>
-          <span className="text-[9px] text-muted-foreground">M16.0 FOUNDATION</span>
+          <span className="text-[9px] text-muted-foreground">M16.1 PLANNING ENGINE</span>
         </div>
       </div>
 
       {/* Goal Dispatcher */}
       <div className="border border-border/70 p-2 space-y-1.5">
-        <span className="text-[9px] tracking-wider text-muted-foreground">SUBMIT COORDINATION GOAL</span>
+        <span className="text-[9px] tracking-wider text-muted-foreground">SUBMIT OR PLAN GOAL</span>
         <div className="flex gap-1.5">
           <input
             type="text"
@@ -113,15 +149,96 @@ export function SwarmPanel() {
           />
           <button
             type="button"
+            onClick={handlePreview}
+            disabled={loading || !goalInput.trim()}
+            className="px-2 py-1 bg-border/40 hover:bg-border/60 text-muted-foreground border border-border/60 rounded text-[9px] font-semibold disabled:opacity-40"
+          >
+            PREVIEW
+          </button>
+          <button
+            type="button"
             onClick={handleLaunch}
             disabled={loading || !goalInput.trim()}
             className="px-2.5 py-1 bg-holo/20 hover:bg-holo/30 text-holo border border-holo/50 rounded text-[9px] font-bold tracking-wider disabled:opacity-40"
           >
-            {loading ? "PLANNING..." : "DISPATCH"}
+            {loading ? "PROCESSING..." : "DISPATCH"}
           </button>
         </div>
         {error && <div className="text-red-400 text-[9px]">{error}</div>}
       </div>
+
+      {/* Plan Preview Section (M16.1) */}
+      {planPreview && (
+        <div className="holo-corners border border-holo/50 bg-background/60 p-2.5 space-y-2">
+          <div className="flex items-center justify-between border-b border-border/50 pb-1.5">
+            <span className="font-bold text-holo text-[10px] tracking-wider">PLAN PREVIEW</span>
+            <div className="flex items-center gap-1.5">
+              <span className="px-1.5 py-0.5 bg-holo/15 text-holo rounded text-[8px] font-bold">
+                {planPreview.complexity}
+              </span>
+              <span className="px-1.5 py-0.5 bg-foreground/10 text-muted-foreground rounded text-[8px]">
+                {planPreview.planning_mode}
+              </span>
+              <span className="px-1.5 py-0.5 bg-yellow-500/15 text-yellow-300 rounded text-[8px]">
+                {planPreview.overall_risk}
+              </span>
+            </div>
+          </div>
+
+          <div className="text-[9px] text-muted-foreground">
+            <span className="text-foreground font-medium">Goal: </span>
+            {planPreview.normalized_goal}
+          </div>
+
+          {/* Task Steps */}
+          <div className="space-y-1 max-h-[140px] overflow-y-auto pr-1">
+            {planPreview.tasks.map((task: PlanningDraftTask, idx: number) => (
+              <div
+                key={task.task_id}
+                className="flex items-center justify-between gap-1 p-1 bg-background/40 border border-border/40 rounded text-[8px]"
+              >
+                <div className="flex items-center gap-1.5 truncate flex-1">
+                  <span className="text-muted-foreground font-mono">{idx + 1}.</span>
+                  <span className="px-1 py-0.2 bg-holo/15 text-holo rounded text-[7px]">
+                    {task.preferred_role ?? "WORKER"}
+                  </span>
+                  <span className="truncate text-foreground font-medium">
+                    {task.objective}
+                  </span>
+                </div>
+                {task.requires_confirmation && (
+                  <span className="text-[7px] text-yellow-400 px-1 py-0.2 bg-yellow-500/10 border border-yellow-500/30 rounded">
+                    CONFIRM
+                  </span>
+                )}
+              </div>
+            ))}
+          </div>
+
+          <div className="flex items-center justify-between text-[8px] text-muted-foreground pt-1 border-t border-border/40">
+            <span>
+              Parallelism: {planPreview.estimated_parallelism} | Steps: {planPreview.estimated_steps}
+            </span>
+            <div className="flex gap-1.5">
+              <button
+                type="button"
+                onClick={() => setPlanPreview(null)}
+                className="px-2 py-0.5 text-muted-foreground hover:text-foreground text-[8px]"
+              >
+                DISCARD
+              </button>
+              <button
+                type="button"
+                onClick={handleExecutePlan}
+                disabled={loading}
+                className="px-2.5 py-0.5 bg-holo text-background font-bold rounded text-[8px] hover:bg-holo/90"
+              >
+                EXECUTE PLAN
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Active Graph View */}
       {activeGraph && (

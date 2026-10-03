@@ -49,6 +49,7 @@ class AgentCoordinator:
         decomposer: Optional[TaskDecomposer] = None,
         security_policy: Optional[AgentSecurityPolicy] = None,
         comm_manager: Optional[CommunicationManager] = None,
+        planning_engine: Optional[Any] = None,
     ) -> None:
         self.registry = registry or agent_registry
         self.tool_registry = tool_registry or create_default_registry()
@@ -61,6 +62,11 @@ class AgentCoordinator:
             tool_registry=self.tool_registry,
         )
         self.comm = comm_manager or communication_manager
+        if planning_engine is None:
+            from app.agents.planning_engine import PlanningEngine
+            self.planning_engine = PlanningEngine(agent_reg=self.registry, tool_reg=self.tool_registry)
+        else:
+            self.planning_engine = planning_engine
 
         # In-memory index of active graphs by graph_id
         self._active_graphs: Dict[str, AgentTaskGraph] = {}
@@ -87,8 +93,28 @@ class AgentCoordinator:
         t0 = time.monotonic()
         logger.info(f"[COORDINATOR] Received coordination goal: {goal!r}")
 
-        # 1. Decompose into DAG
-        graph = self.decomposer.decompose(goal=goal, project_name=project_name)
+        # 1. Plan via PlanningEngine or fallback Decomposer
+        from app.agents.planning_models import PlanningRequest, PlanStatus
+
+        if self.planning_engine is not None:
+            plan_res = await self.planning_engine.plan(
+                PlanningRequest(user_goal=goal, project_name=project_name)
+            )
+            if plan_res.status == PlanStatus.INVALID:
+                graph = AgentTaskGraph(goal=goal)
+                graph.status = AgentStatus.FAILED
+                graph.error = f"Invalid task graph: {plan_res.validation.errors}"
+                await self._emit_event(
+                    ActionType.AGENT_GRAPH_FAILED,
+                    ActionStatus.FAILED,
+                    f"Graph validation failed: {plan_res.validation.errors}",
+                    graph_id=graph.graph_id,
+                )
+                return graph
+            graph = self.planning_engine.to_agent_task_graph(plan_res)
+        else:
+            graph = self.decomposer.decompose(goal=goal, project_name=project_name)
+
         is_valid, err = graph.validate_graph()
         if not is_valid:
             graph.status = AgentStatus.FAILED
@@ -156,66 +182,91 @@ class AgentCoordinator:
         self,
         graph: AgentTaskGraph,
         auto_confirm: bool = False,
+        timeout: Optional[float] = None,
     ) -> AgentTaskGraph:
         """Progressively execute ready tasks in parallel respecting dependencies & concurrency."""
         self._active_graphs[graph.graph_id] = graph
-        async with self._get_lock(graph.graph_id):
-            graph.status = AgentStatus.RUNNING
 
-            while not graph.is_terminal():
-                ready_tasks = graph.get_ready_tasks()
+        async def _run_graph() -> AgentTaskGraph:
+            async with self._get_lock(graph.graph_id):
+                graph.status = AgentStatus.RUNNING
 
-                if not ready_tasks:
-                    # Check if waiting on human confirmation
-                    has_pending_confirmation = any(
-                        t.status == AgentStatus.REQUIRES_CONFIRMATION for t in graph.tasks.values()
-                    )
-                    if has_pending_confirmation:
-                        graph.status = AgentStatus.REQUIRES_CONFIRMATION
-                        logger.info(f"[COORDINATOR] Graph '{graph.graph_id}' waiting for user confirmation.")
-                        self._persist_graph_checkpoint(graph, "CONFIRMATION_WAITING")
-                        break
+                while not graph.is_terminal():
+                    ready_tasks = graph.get_ready_tasks()
 
-                    # Check if all completed
-                    if graph.is_completed():
-                        graph.status = AgentStatus.COMPLETED
-                        graph.completed_at = _utc_now_iso()
-                        await self._emit_event(
-                            ActionType.AGENT_GRAPH_COMPLETED,
-                            ActionStatus.COMPLETED,
-                            f"Graph completed successfully: {graph.goal[:60]}",
-                            graph_id=graph.graph_id,
-                            safe_metadata=graph.get_progress(),
+                    if not ready_tasks:
+                        # Check if waiting on human confirmation
+                        has_pending_confirmation = any(
+                            t.status == AgentStatus.REQUIRES_CONFIRMATION for t in graph.tasks.values()
                         )
-                        self._persist_graph_checkpoint(graph, "GRAPH_COMPLETED")
+                        if has_pending_confirmation:
+                            graph.status = AgentStatus.REQUIRES_CONFIRMATION
+                            logger.info(f"[COORDINATOR] Graph '{graph.graph_id}' waiting for user confirmation.")
+                            self._persist_graph_checkpoint(graph, "CONFIRMATION_WAITING")
+                            break
+
+                        # Check if all completed
+                        if graph.is_completed():
+                            graph.status = AgentStatus.COMPLETED
+                            graph.completed_at = _utc_now_iso()
+                            await self._emit_event(
+                                ActionType.AGENT_GRAPH_COMPLETED,
+                                ActionStatus.COMPLETED,
+                                f"Graph completed successfully: {graph.goal[:60]}",
+                                graph_id=graph.graph_id,
+                                safe_metadata=graph.get_progress(),
+                            )
+                            self._persist_graph_checkpoint(graph, "GRAPH_COMPLETED")
+                            break
+
+                        # Check if deadlock / blocked
+                        if any(t.status == AgentStatus.BLOCKED for t in graph.tasks.values()):
+                            graph.status = AgentStatus.FAILED
+                            graph.error = "Graph blocked by failed dependency."
+                            await self._emit_event(
+                                ActionType.AGENT_GRAPH_FAILED,
+                                ActionStatus.FAILED,
+                                "Graph execution blocked by failed dependencies.",
+                                graph_id=graph.graph_id,
+                            )
+                            self._persist_graph_checkpoint(graph, "GRAPH_BLOCKED")
+                            break
+
+                        # Unknown idle state, terminate safely
                         break
 
-                    # Check if deadlock / blocked
-                    if any(t.status == AgentStatus.BLOCKED for t in graph.tasks.values()):
-                        graph.status = AgentStatus.FAILED
-                        graph.error = "Graph blocked by failed dependency."
-                        await self._emit_event(
-                            ActionType.AGENT_GRAPH_FAILED,
-                            ActionStatus.FAILED,
-                            "Graph execution blocked by failed dependencies.",
-                            graph_id=graph.graph_id,
-                        )
-                        self._persist_graph_checkpoint(graph, "GRAPH_BLOCKED")
-                        break
+                    # Execute ready tasks in parallel
+                    exec_coros = [
+                        self._execute_single_task(graph, task, auto_confirm=auto_confirm)
+                        for task in ready_tasks
+                    ]
+                    await asyncio.gather(*exec_coros)
 
-                    # Unknown idle state, terminate safely
-                    break
+                    # Persist intermediate checkpoint
+                    self._persist_graph_checkpoint(graph, "STEP_COMPLETED")
 
-                # Execute ready tasks in parallel
-                exec_coros = [
-                    self._execute_single_task(graph, task, auto_confirm=auto_confirm)
-                    for task in ready_tasks
-                ]
-                await asyncio.gather(*exec_coros)
+                return graph
 
-                # Persist intermediate checkpoint
-                self._persist_graph_checkpoint(graph, "STEP_COMPLETED")
-
+        try:
+            if timeout is not None:
+                return await asyncio.wait_for(_run_graph(), timeout=timeout)
+            return await _run_graph()
+        except asyncio.TimeoutError:
+            graph.status = AgentStatus.FAILED
+            graph.error = f"Graph execution exceeded deadline ({timeout}s)."
+            graph.cancel_graph(reason="Timeout deadline reached")
+            await self._emit_event(
+                ActionType.RUNTIME_TIMEOUT,
+                ActionStatus.FAILED,
+                f"Graph '{graph.graph_id}' timed out.",
+                graph_id=graph.graph_id,
+            )
+            await self._emit_event(
+                ActionType.AGENT_GRAPH_FAILED,
+                ActionStatus.FAILED,
+                f"Graph execution timed out after {timeout}s",
+                graph_id=graph.graph_id,
+            )
             return graph
 
     # -----------------------------------------------------------------------
@@ -529,6 +580,28 @@ class AgentCoordinator:
     def list_graphs(self) -> List[Dict[str, Any]]:
         """List summary info for all active graphs."""
         return [g.get_progress() for g in self._active_graphs.values()]
+
+    async def cancel(self, graph_id: str, reason: str = "User cancelled execution") -> bool:
+        """Cancel an active graph by ID. Returns True if cancelled, False if not found.
+
+        Alias for cancel_graph() that returns a bool for simpler test assertions.
+        """
+        result = await self.cancel_graph(graph_id=graph_id, reason=reason)
+        if result is not None:
+            return True
+        return False
+
+    def start_graph(self, graph: AgentTaskGraph, auto_confirm: bool = False) -> None:
+        """Fire-and-forget graph execution. Registers graph as EXECUTING immediately
+        and schedules execution as a background asyncio task.
+        """
+        self._active_graphs[graph.graph_id] = graph
+        graph.status = AgentStatus.RUNNING
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(self.execute_graph(graph, auto_confirm=auto_confirm))
+        except RuntimeError:
+            pass
 
 
 # Global coordinator singleton
