@@ -597,6 +597,30 @@ class RyvenControlEngine:
             approved=approved,
         )
 
+    @property
+    def reliability_runner(self) -> Any:
+        if hasattr(self, "_reliability_runner") and self._reliability_runner is not None:
+            return self._reliability_runner
+        from app.control.reliability import reliability_runner
+        return reliability_runner
+
+    @reliability_runner.setter
+    def reliability_runner(self, runner: Any) -> None:
+        self._reliability_runner = runner
+
+    async def run_reliability_scenario(
+        self,
+        scenario_or_id: Any,
+        auto_confirm: bool = False,
+        session_id: str = "default",
+    ) -> Any:
+        """Run a controlled reliability scenario through the ReliabilityScenarioRunner."""
+        return await self.reliability_runner.run_scenario(
+            scenario_or_id=scenario_or_id,
+            auto_confirm=auto_confirm,
+            session_id=session_id,
+        )
+
     # Aliases for compatibility
     confirm_action = confirm_control
     cancel_execution = cancel_control

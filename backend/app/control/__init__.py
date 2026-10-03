@@ -43,6 +43,17 @@ def __getattr__(name: str):
     ):
         import app.control.adaptive as adapt
         return getattr(adapt, name)
+    if name in (
+        "ReliabilityScenario",
+        "ScenarioExecutionResult",
+        "ReliabilityMetrics",
+        "ReliabilityMetricsTracker",
+        "ReliabilityScenarioRunner",
+        "reliability_runner",
+        "create_canonical_scenarios",
+    ):
+        import app.control.reliability as rel
+        return getattr(rel, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 __all__ = [
@@ -74,4 +85,11 @@ __all__ = [
     "ActionIdempotency",
     "AdaptiveExecutionResult",
     "StateEvaluationResult",
+    "ReliabilityScenario",
+    "ScenarioExecutionResult",
+    "ReliabilityMetrics",
+    "ReliabilityMetricsTracker",
+    "ReliabilityScenarioRunner",
+    "reliability_runner",
+    "create_canonical_scenarios",
 ]
