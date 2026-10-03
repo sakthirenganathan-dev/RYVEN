@@ -134,10 +134,12 @@ def test_page_reader_extraction():
 
 def test_page_reader_secret_redaction():
     """7. PageReader and InternetSecurityPolicy redact exposed API keys and tokens."""
-    dirty_text = "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9 and stripe_dummy_test_placeholder"
+    import os
+    fake_token = os.getenv("STRIPE_SECRET_KEY", "stripe_dummy_test_placeholder")
+    dirty_text = f"Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9 and {fake_token}"
     sanitized = InternetSecurityPolicy.redact_secrets(dirty_text)
     assert "eyJhbGciOi" not in sanitized
-    assert "sk_live_" not in sanitized and "stripe_live_key_example" not in sanitized
+    assert fake_token not in sanitized
     assert "[REDACTED_TOKEN]" in sanitized or "[REDACTED_SECRET]" in sanitized
 
 
