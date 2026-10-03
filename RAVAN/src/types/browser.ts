@@ -3,13 +3,7 @@
  */
 
 export type BrowserStatus =
-  | "IDLE"
-  | "INITIALIZING"
-  | "ACTIVE"
-  | "NAVIGATING"
-  | "WAITING_CONFIRMATION"
-  | "ERROR"
-  | "CLOSED";
+  "IDLE" | "INITIALIZING" | "ACTIVE" | "NAVIGATING" | "WAITING_CONFIRMATION" | "ERROR" | "CLOSED";
 
 export type BrowserActionType =
   | "OPEN"
@@ -27,6 +21,7 @@ export type BrowserActionType =
   | "SNAPSHOT"
   | "SUBMIT_FORM"
   | "DOWNLOAD"
+  | "UPLOAD"
   | "CLOSE";
 
 export interface BrowserSnapshot {

@@ -34,7 +34,8 @@ class WorkflowExecutor:
     async def execute(
         self,
         workflow: WorkflowDefinition,
-        auto_confirm: bool = True,
+        auto_confirm: bool = False,
+        confirmed_step_ids: Optional[set[str]] = None,
     ) -> WorkflowExecutionResult:
         """Run workflow steps in sequential order, enforcing safety and capturing step results."""
         workflow.started_at = utc_now_iso()
@@ -42,7 +43,17 @@ class WorkflowExecutor:
             workflow.status = WorkflowState.RUNNING
         logger.info(f"Starting workflow execution: '{workflow.name}' (ID: {workflow.workflow_id})")
 
-        completed_details: List[Dict[str, Any]] = []
+        completed_details: List[Dict[str, Any]] = [
+            {
+                "step_id": step.step_id,
+                "name": step.name,
+                "tool": step.tool_name,
+                "status": step.status.value,
+                "message": (step.result or {}).get("message", "Step previously completed."),
+            }
+            for step in workflow.steps
+            if step.status == StepState.SUCCESS
+        ]
         context_state: Dict[str, Any] = {}
         if workflow.metadata:
             if "project_name" in workflow.metadata:
@@ -50,7 +61,10 @@ class WorkflowExecutor:
             if "project_name_hint" in workflow.metadata and workflow.metadata["project_name_hint"]:
                 context_state["project_name"] = workflow.metadata["project_name_hint"]
 
+        approved_steps = set(confirmed_step_ids or ())
         for idx, step in enumerate(workflow.steps):
+            if step.status == StepState.SUCCESS:
+                continue
             workflow.current_step_index = idx
 
             # Check for cancellation before executing step
@@ -60,7 +74,11 @@ class WorkflowExecutor:
                 break
 
             # Check if confirmation is required
-            if self.confirmation_mgr.requires_confirmation(step) and not auto_confirm:
+            if (
+                self.confirmation_mgr.requires_confirmation(step)
+                and not auto_confirm
+                and step.step_id not in approved_steps
+            ):
                 workflow.status = WorkflowState.WAITING_FOR_CONFIRMATION
                 logger.info(f"Workflow paused at step {idx + 1} ({step.name}) awaiting user confirmation.")
                 return WorkflowExecutionResult(
@@ -74,6 +92,11 @@ class WorkflowExecutor:
                     steps_failed=workflow.steps_failed,
                     step_details=completed_details,
                     started_at=workflow.started_at,
+                    metadata={
+                        "pending_step_id": step.step_id,
+                        "pending_tool": step.tool_name,
+                        "confirmation_required": True,
+                    },
                 )
 
             # Mark step running

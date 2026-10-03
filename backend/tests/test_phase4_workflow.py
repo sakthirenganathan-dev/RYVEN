@@ -321,6 +321,92 @@ class MockExecutableTool(BaseTool):
         return self.return_val
 
 
+class TrackingExecutableTool(BaseTool):
+    """Record execution order for confirmation-resume tests without side effects."""
+    def __init__(self, name: str, executions: list[str]):
+        self.name = name
+        self.description = f"Tracking {name}"
+        self.executions = executions
+        self.input_schema = {}
+        self.requires_confirmation = False
+
+    async def execute(self, **kwargs):
+        self.executions.append(self.name)
+        return {"success": True, "message": self.name}
+
+
+@pytest.mark.asyncio
+async def test_workflow_execution_does_not_auto_confirm_by_default():
+    """Direct workflow execution must stop before an impactful tool unless approved."""
+    registry = ToolRegistry()
+    commit_tool = MockExecutableTool("git_commit", {"success": True, "message": "Committed"})
+    commit_tool.execute = AsyncMock(return_value={"success": True, "message": "Committed"})
+    registry.register(commit_tool)
+    executor = WorkflowExecutor(registry=registry)
+    workflow = WorkflowDefinition(
+        name="Commit workflow",
+        description="Confirmation default test",
+        steps=[WorkflowStep(step_id="commit-step", tool_name="git_commit", name="Commit")],
+    )
+
+    result = await executor.execute(workflow)
+
+    assert result.status == WorkflowState.WAITING_FOR_CONFIRMATION
+    commit_tool.execute.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_workflow_engine_default_does_not_auto_confirm():
+    """A workflow query must preserve the executor's confirmation boundary by default."""
+    executor = AsyncMock()
+    validator = MagicMock()
+    validator.validate.return_value = (True, "")
+    executor.execute.return_value = WorkflowExecutionResult(
+        workflow_id="wf-default-confirm",
+        name="Prepare Development Workspace",
+        status=WorkflowState.WAITING_FOR_CONFIRMATION,
+        success=False,
+        message="Waiting for confirmation.",
+        steps_total=1,
+        steps_completed=0,
+        steps_failed=0,
+    )
+    engine = WorkflowEngine(executor=executor, validator=validator)
+
+    await engine.run_from_query("prepare my development workspace")
+
+    assert executor.execute.await_args.kwargs["auto_confirm"] is False
+
+
+@pytest.mark.asyncio
+async def test_workflow_resume_requires_and_executes_only_confirmed_step():
+    """Explicit approval resumes the pending step without replaying completed work."""
+    registry = ToolRegistry()
+    executed: list[str] = []
+    registry.register(TrackingExecutableTool("system_info", executed))
+    registry.register(TrackingExecutableTool("git_commit", executed))
+    engine = WorkflowEngine(registry=registry)
+    workflow = WorkflowDefinition(
+        name="Read then commit",
+        description="Exact-step approval test",
+        steps=[
+            WorkflowStep(step_id="read-step", tool_name="system_info", name="Read status"),
+            WorkflowStep(step_id="commit-step", tool_name="git_commit", name="Commit"),
+        ],
+    )
+
+    paused = await engine.execute_workflow(workflow, auto_confirm=False)
+    assert paused.status == WorkflowState.WAITING_FOR_CONFIRMATION
+    pending_step_id = workflow.steps[workflow.current_step_index].step_id
+    assert executed == ["system_info"]
+
+    resumed = await engine.resume_workflow(workflow.workflow_id, confirmed_step_id=pending_step_id)
+
+    assert resumed is not None
+    assert resumed.status == WorkflowState.COMPLETED
+    assert executed == ["system_info", "git_commit"]
+
+
 @pytest.mark.asyncio
 async def test_executor_successful_workflow():
     """Sequential execution runs all steps through ToolRegistry and marks COMPLETED."""
@@ -378,7 +464,7 @@ async def test_executor_stops_on_step_failure():
 
     workflow = WorkflowDefinition(name="Failing WF", description="", steps=[s1, s2, s3])
 
-    result = await executor.execute(workflow)
+    result = await executor.execute(workflow, auto_confirm=True)
 
     assert result.status == WorkflowState.FAILED
     assert result.steps_completed == 1

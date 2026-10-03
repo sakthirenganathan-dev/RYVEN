@@ -265,6 +265,43 @@ def create_default_registry() -> ToolRegistry:
     registry.register(RefreshPageTool())
     registry.register(TakeBrowserSnapshotTool())
     registry.register(CloseBrowserTool())
+    # RYVEN 3.0 Unified Internet Agent Tools
+    from app.internet.tools import (
+        InternetSearchTool,
+        WebResearchTool,
+        WebTaskTool,
+        WebVerifyTool,
+        BrowserTabsTool,
+        BrowserSnapshotTool,
+        BrowserScreenshotTool,
+        PageOCRTool,
+        FormFieldFillTool,
+        FormOptionSelectTool,
+        FormCheckboxToggleTool,
+        FormRadioSelectTool,
+        FormSubmitTool,
+        WebDownloadTool,
+        WebUploadTool,
+        WebVerifyDownloadTool,
+        WebVerifyUploadTool,
+    )
+    registry.register(InternetSearchTool())
+    registry.register(WebResearchTool())
+    registry.register(WebTaskTool())
+    registry.register(WebVerifyTool())
+    registry.register(BrowserTabsTool())
+    registry.register(BrowserSnapshotTool())
+    registry.register(BrowserScreenshotTool())
+    registry.register(PageOCRTool())
+    registry.register(FormFieldFillTool())
+    registry.register(FormOptionSelectTool())
+    registry.register(FormCheckboxToggleTool())
+    registry.register(FormRadioSelectTool())
+    registry.register(FormSubmitTool())
+    registry.register(WebDownloadTool())
+    registry.register(WebUploadTool())
+    registry.register(WebVerifyDownloadTool())
+    registry.register(WebVerifyUploadTool())
     return registry
 
 

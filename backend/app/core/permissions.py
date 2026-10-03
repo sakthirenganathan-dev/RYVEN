@@ -195,6 +195,22 @@ class SafetyGuard:
             "refresh_page",
             "take_browser_snapshot",
             "close_browser",
+            # RYVEN 3.0 Unified Internet Agent tools
+            "internet_search",
+            "web_research",
+            "web_task",
+            "web_verify",
+            "browser_tabs",
+            "browser_snapshot",
+            "form_field_fill",
+            "form_option_select",
+            "form_checkbox_toggle",
+            "form_radio_select",
+            "form_submit",
+            "web_download",
+            "web_upload",
+            "web_verify_download",
+            "web_verify_upload",
         }
 
 

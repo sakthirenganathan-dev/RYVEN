@@ -136,171 +136,214 @@ class OrchestratorEngine:
         if task.status in (TaskState.CANCELLED, TaskState.PAUSED, TaskState.FAILED, TaskState.COMPLETED):
             return self._build_result(task, duration_ms=(time.monotonic() - start_time) * 1000)
 
+        # M15.3.9: Register overall task deadline
+        from app.runtime.deadline_manager import deadline_manager
+        from app.runtime.resource_manager import resource_manager
+        from app.runtime.concurrency import concurrency_controller
+        from app.runtime.models import ResourceDecision
+
+        deadline_manager.register_task_deadline(task.task_id)
+
         task.status = TaskState.RUNNING
         state_tracker = ProjectStateTracker(task.project_name)
 
-        while True:
-            # Check for cancellation or pause
-            if task.status in (TaskState.CANCELLED, TaskState.PAUSED):
-                break
+        try:
+            while True:
+                # Check for cancellation or pause
+                if task.status in (TaskState.CANCELLED, TaskState.PAUSED):
+                    break
 
-            dag = DependencyGraph(task.plan.steps)
-            ready_steps = dag.get_ready_steps()
+                dag = DependencyGraph(task.plan.steps)
+                ready_steps = dag.get_ready_steps()
 
-            if not ready_steps:
-                # No more pending ready steps
-                break
+                if not ready_steps:
+                    # No more pending ready steps
+                    break
 
-            # Execute the first ready step sequentially
-            step = ready_steps[0]
-            task.current_step_id = step.step_id
+                # Execute the first ready step sequentially
+                step = ready_steps[0]
+                task.current_step_id = step.step_id
 
-            # 1. Enforce confirmation boundary
-            if step.requires_confirmation and not auto_confirm:
-                step.status = StepState.WAITING_CONFIRMATION
-                task.status = TaskState.WAITING_CONFIRMATION
-                task.add_checkpoint(
-                    name=f"CONFIRMATION_REQUIRED_{step.step_type.value}",
-                    step_id=step.step_id,
-                    status="WAITING",
-                    summary=step.confirmation_reason or f"User confirmation required for {step.name}.",
-                )
-                OrchestrationTelemetry.confirmation_requested(task.task_id, step.step_id, step.confirmation_reason or step.name)
-                logger.info(f"[ORCHESTRATOR] Task '{task.task_id}' paused awaiting confirmation for step '{step.name}'.")
-                # M14.2: emit confirmation_requested event
-                try:
-                    await _get_tracker().confirmation_requested(
-                        task_id=task.task_id, step_type=step.step_type.value,
-                        step_name=step.name, action_id=step.step_id,
-                        reason=step.confirmation_reason or step.name,
-                    )
-                except Exception:
-                    pass
-                return self._build_result(task, duration_ms=(time.monotonic() - start_time) * 1000)
+                # M15.3.9: Preflight resource pressure check
+                res_check = resource_manager.check_resource_pressure(operation_type=step.step_type.value)
+                if res_check.decision == ResourceDecision.BLOCK:
+                    step.status = StepState.FAILED
+                    task.status = TaskState.PAUSED
+                    err_msg = f"Execution blocked by host resource policy: {res_check.reason}"
+                    task.error = err_msg
+                    task.add_checkpoint(f"{step.step_type.value}_BLOCKED", step.step_id, "FAILED", err_msg)
+                    logger.warning(f"[ORCHESTRATOR] {err_msg}")
+                    break
 
-            # 2. Execute step
-            step_start = time.monotonic()
-            step.started_at = utc_now_iso()
-            step.status = StepState.RUNNING
-            OrchestrationTelemetry.step_started(task.task_id, step.step_id, step.step_type.value, step.name)
-            step_index = next(
-                (i for i, s in enumerate(task.plan.steps) if s.step_id == step.step_id), None
-            )
-            # M14.2: emit step started
-            _step_action_id = step.step_id
-            try:
-                await _get_tracker().step_started(
-                    task_id=task.task_id, step_type=step.step_type.value,
-                    step_name=step.name, action_id=_step_action_id,
-                    step_index=step_index, total_steps=task.plan.total_steps,
-                )
-            except Exception:
-                pass
-
-            try:
-                success, output, err_msg = await self._execute_step(task, step, state_tracker)
-                step_duration = (time.monotonic() - step_start) * 1000
-
-                if success:
-                    step.status = StepState.SUCCESS
-                    step.result = output
-                    step.completed_at = utc_now_iso()
+                # 1. Enforce confirmation boundary
+                if step.requires_confirmation and not auto_confirm:
+                    step.status = StepState.WAITING_CONFIRMATION
+                    task.status = TaskState.WAITING_CONFIRMATION
                     task.add_checkpoint(
-                        name=f"{step.step_type.value}_PASSED",
+                        name=f"CONFIRMATION_REQUIRED_{step.step_type.value}",
                         step_id=step.step_id,
-                        status="SUCCESS",
-                        summary=f"Completed {step.name}.",
-                        metadata=output,
+                        status="WAITING",
+                        summary=step.confirmation_reason or f"User confirmation required for {step.name}.",
                     )
-                    OrchestrationTelemetry.step_completed(task.task_id, step.step_id, step.step_type.value, step_duration)
-                    # M14.2: emit step completed
+                    OrchestrationTelemetry.confirmation_requested(task.task_id, step.step_id, step.confirmation_reason or step.name)
+                    logger.info(f"[ORCHESTRATOR] Task '{task.task_id}' paused awaiting confirmation for step '{step.name}'.")
+                    # M14.2: emit confirmation_requested event
                     try:
-                        await _get_tracker().step_completed(
+                        await _get_tracker().confirmation_requested(
                             task_id=task.task_id, step_type=step.step_type.value,
-                            step_name=step.name, action_id=_step_action_id,
-                            duration_ms=step_duration, step_index=step_index,
-                            total_steps=task.plan.total_steps,
+                            step_name=step.name, action_id=step.step_id,
+                            reason=step.confirmation_reason or step.name,
                         )
                     except Exception:
                         pass
-                else:
-                    # Handle step failure
-                    step.error = err_msg
-                    step.completed_at = utc_now_iso()
-                    OrchestrationTelemetry.step_failed(task.task_id, step.step_id, step.step_type.value, err_msg, step.retry_count)
+                    return self._build_result(task, duration_ms=(time.monotonic() - start_time) * 1000)
 
-                    # Bounded retry handling for build / test failures
-                    if step.step_type in (StepType.BUILD, StepType.TEST) and step.retry_count < step.max_retries:
-                        step.retry_count += 1
-                        task.status = TaskState.RETRYING
-                        task.add_checkpoint(
-                            name=f"{step.step_type.value}_RETRYING",
-                            step_id=step.step_id,
-                            status="RETRYING",
-                            summary=f"Retrying {step.name} (Attempt {step.retry_count}/{step.max_retries}): {err_msg}",
+                # 2. Execute step
+                step_start = time.monotonic()
+                step.started_at = utc_now_iso()
+                step.status = StepState.RUNNING
+                OrchestrationTelemetry.step_started(task.task_id, step.step_id, step.step_type.value, step.name)
+                step_index = next(
+                    (i for i, s in enumerate(task.plan.steps) if s.step_id == step.step_id), None
+                )
+                # M14.2: emit step started
+                _step_action_id = step.step_id
+                try:
+                    await _get_tracker().step_started(
+                        task_id=task.task_id, step_type=step.step_type.value,
+                        step_name=step.name, action_id=_step_action_id,
+                        step_index=step_index, total_steps=task.plan.total_steps,
+                    )
+                except Exception:
+                    pass
+
+                try:
+                    # M15.3.9: Bounded concurrency & deadline propagation
+                    if step.step_type in (StepType.BUILD, StepType.TEST):
+                        async with concurrency_controller.limit_build():
+                            ok, step_res, timeout_err = await deadline_manager.execute_with_timeout(
+                                self._execute_step(task, step, state_tracker),
+                                task_id=task.task_id,
+                                operation_name=step.name,
+                            )
+                    else:
+                        ok, step_res, timeout_err = await deadline_manager.execute_with_timeout(
+                            self._execute_step(task, step, state_tracker),
+                            task_id=task.task_id,
+                            operation_name=step.name,
                         )
-                        logger.info(f"[ORCHESTRATOR] Retrying step '{step.name}' (Attempt {step.retry_count}/{step.max_retries})")
-                        # M14.2: emit retry event
+
+                    if not ok:
+                        success = False
+                        output = None
+                        err_msg = timeout_err or f"Step '{step.name}' timed out."
+                    else:
+                        success, output, err_msg = step_res
+
+                    step_duration = (time.monotonic() - step_start) * 1000
+
+                    if success:
+                        step.status = StepState.SUCCESS
+                        step.result = output
+                        step.completed_at = utc_now_iso()
+                        task.add_checkpoint(
+                            name=f"{step.step_type.value}_PASSED",
+                            step_id=step.step_id,
+                            status="SUCCESS",
+                            summary=f"Completed {step.name}.",
+                            metadata=output,
+                        )
+                        OrchestrationTelemetry.step_completed(task.task_id, step.step_id, step.step_type.value, step_duration)
+                        # M14.2: emit step completed
                         try:
-                            await _get_tracker().step_retrying(
+                            await _get_tracker().step_completed(
                                 task_id=task.task_id, step_type=step.step_type.value,
                                 step_name=step.name, action_id=_step_action_id,
-                                retry_count=step.retry_count, max_retries=step.max_retries,
+                                duration_ms=step_duration, step_index=step_index,
+                                total_steps=task.plan.total_steps,
                             )
                         except Exception:
                             pass
-                        # Reset step to PENDING so DAG can pick it up again
-                        step.status = StepState.PENDING
-                        continue
+                    else:
+                        # Handle step failure
+                        step.error = err_msg
+                        step.completed_at = utc_now_iso()
+                        OrchestrationTelemetry.step_failed(task.task_id, step.step_id, step.step_type.value, err_msg, step.retry_count)
 
-                    # If retry exhausted or non-retryable failure:
+                        # Bounded retry handling for build / test failures
+                        if step.step_type in (StepType.BUILD, StepType.TEST) and step.retry_count < step.max_retries:
+                            step.retry_count += 1
+                            task.status = TaskState.RETRYING
+                            task.add_checkpoint(
+                                name=f"{step.step_type.value}_RETRYING",
+                                step_id=step.step_id,
+                                status="RETRYING",
+                                summary=f"Retrying {step.name} (Attempt {step.retry_count}/{step.max_retries}): {err_msg}",
+                            )
+                            logger.info(f"[ORCHESTRATOR] Retrying step '{step.name}' (Attempt {step.retry_count}/{step.max_retries})")
+                            # M14.2: emit retry event
+                            try:
+                                await _get_tracker().step_retrying(
+                                    task_id=task.task_id, step_type=step.step_type.value,
+                                    step_name=step.name, action_id=_step_action_id,
+                                    retry_count=step.retry_count, max_retries=step.max_retries,
+                                )
+                            except Exception:
+                                pass
+                            # Reset step to PENDING so DAG can pick it up again
+                            step.status = StepState.PENDING
+                            continue
+
+                        # If retry exhausted or non-retryable failure:
+                        step.status = StepState.FAILED
+                        task.status = TaskState.FAILED
+                        task.error = f"Step '{step.name}' failed: {err_msg}"
+                        task.add_checkpoint(
+                            name=f"{step.step_type.value}_FAILED",
+                            step_id=step.step_id,
+                            status="FAILED",
+                            summary=f"Failed {step.name}: {err_msg}",
+                        )
+                        # M14.2: emit step failed
+                        try:
+                            await _get_tracker().step_failed(
+                                task_id=task.task_id, step_type=step.step_type.value,
+                                step_name=step.name, action_id=_step_action_id,
+                                error=err_msg, duration_ms=step_duration,
+                                retry_count=step.retry_count, step_index=step_index,
+                                total_steps=task.plan.total_steps,
+                            )
+                        except Exception:
+                            pass
+                        break
+
+                except Exception as e:
+                    step_duration = (time.monotonic() - step_start) * 1000
+                    err = str(e)
                     step.status = StepState.FAILED
+                    step.error = err
+                    step.completed_at = utc_now_iso()
                     task.status = TaskState.FAILED
-                    task.error = f"Step '{step.name}' failed: {err_msg}"
+                    task.error = f"Exception in step '{step.name}': {err}"
+                    OrchestrationTelemetry.step_failed(task.task_id, step.step_id, step.step_type.value, err, step.retry_count)
                     task.add_checkpoint(
-                        name=f"{step.step_type.value}_FAILED",
+                        name=f"{step.step_type.value}_EXCEPTION",
                         step_id=step.step_id,
                         status="FAILED",
-                        summary=f"Failed {step.name}: {err_msg}",
+                        summary=f"Exception in {step.name}: {err}",
                     )
-                    # M14.2: emit step failed
+                    # M14.2: emit step exception as failed event
                     try:
                         await _get_tracker().step_failed(
                             task_id=task.task_id, step_type=step.step_type.value,
                             step_name=step.name, action_id=_step_action_id,
-                            error=err_msg, duration_ms=step_duration,
-                            retry_count=step.retry_count, step_index=step_index,
-                            total_steps=task.plan.total_steps,
+                            error=err[:256], duration_ms=step_duration,
                         )
                     except Exception:
                         pass
                     break
-
-            except Exception as e:
-                step_duration = (time.monotonic() - step_start) * 1000
-                err = str(e)
-                step.status = StepState.FAILED
-                step.error = err
-                step.completed_at = utc_now_iso()
-                task.status = TaskState.FAILED
-                task.error = f"Exception in step '{step.name}': {err}"
-                OrchestrationTelemetry.step_failed(task.task_id, step.step_id, step.step_type.value, err, step.retry_count)
-                task.add_checkpoint(
-                    name=f"{step.step_type.value}_EXCEPTION",
-                    step_id=step.step_id,
-                    status="FAILED",
-                    summary=f"Exception in {step.name}: {err}",
-                )
-                # M14.2: emit step exception as failed event
-                try:
-                    await _get_tracker().step_failed(
-                        task_id=task.task_id, step_type=step.step_type.value,
-                        step_name=step.name, action_id=_step_action_id,
-                        error=err[:256], duration_ms=step_duration,
-                    )
-                except Exception:
-                    pass
-                break
+        finally:
+            deadline_manager.clear_task(task.task_id)
 
         # Finalize Task
         duration_total = (time.monotonic() - start_time) * 1000

@@ -78,6 +78,15 @@ class ActionEventBus:
         for sid in dead:
             self._subscribers.pop(sid, None)
 
+    def emit(self, event: ActionEvent) -> None:
+        """Synchronously enqueue and record event in history, broadcasting to subscribers if loop running."""
+        try:
+            import asyncio
+            loop = asyncio.get_running_loop()
+            loop.create_task(self.publish(event))
+        except RuntimeError:
+            self._history.append(event)
+
     # -----------------------------------------------------------------------
     # Subscription management
     # -----------------------------------------------------------------------

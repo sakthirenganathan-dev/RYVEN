@@ -57,9 +57,7 @@ function TimelineRow({ event, isExpanded, onToggle }: TimelineRowProps) {
   const icon = STATUS_ICON[event.status] ?? "○";
   const color = STATUS_COLOR[event.status] ?? "text-muted-foreground";
   const hasMeta =
-    Object.keys(event.safe_metadata).length > 0 ||
-    event.error_code ||
-    event.confirmation_status;
+    Object.keys(event.safe_metadata).length > 0 || event.error_code || event.confirmation_status;
 
   return (
     <div className="group">
@@ -103,12 +101,8 @@ function TimelineRow({ event, isExpanded, onToggle }: TimelineRowProps) {
               Step {(event.step_index ?? 0) + 1} / {event.total_steps}
             </div>
           )}
-          {event.confirmation_status && (
-            <div>Confirmation: {event.confirmation_status}</div>
-          )}
-          {event.error_code && (
-            <div className="text-red-400">Error: {event.error_code}</div>
-          )}
+          {event.confirmation_status && <div>Confirmation: {event.confirmation_status}</div>}
+          {event.error_code && <div className="text-red-400">Error: {event.error_code}</div>}
           {event.description && <div className="text-foreground/60">{event.description}</div>}
           {Object.entries(event.safe_metadata)
             .filter(([, v]) => typeof v !== "object" && v !== null && v !== undefined)

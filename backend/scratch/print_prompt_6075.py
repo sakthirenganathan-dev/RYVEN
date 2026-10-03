@@ -1,0 +1,13 @@
+import json
+import sys
+
+sys.stdout.reconfigure(encoding='utf-8')
+
+transcript_path = r"C:\Users\sakth\.gemini\antigravity-ide\brain\7df9d0f9-2799-489c-b7a7-89f30c69938c\.system_generated\logs\transcript.jsonl"
+
+with open(transcript_path, "r", encoding="utf-8") as f:
+    for idx, line in enumerate(f):
+        if idx + 1 == 6075:
+            obj = json.loads(line)
+            print(obj.get("content", ""))
+            break

@@ -96,6 +96,25 @@ async def test_assistant_system_routing(assistant):
 
 
 @pytest.mark.asyncio
+async def test_single_tool_request_runs_through_agent_control_plane(assistant):
+    """A deterministic single-tool request creates an observable agent task."""
+    assert assistant.agent_engine.workflow_engine is assistant.workflow_engine
+    response = await assistant.process("What time is it right now?")
+
+    assert response.success is True
+    assert response.type == "tool"
+    assert response.tool == "time"
+    assert "iso" in response.metadata
+    task_id = response.metadata.get("task_id")
+    assert task_id
+    task = assistant.agent_engine.get_task_state(task_id)
+    assert task is not None
+    assert task.status.value == "COMPLETED"
+    assert task.current_plan is not None
+    assert task.current_plan.total_steps == 1
+
+
+@pytest.mark.asyncio
 async def test_assistant_ai_routing(assistant):
     """Assistant routes general conversation to the AI provider."""
     response = await assistant.process("What is quantum computing?")

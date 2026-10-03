@@ -1,0 +1,346 @@
+<USER_REQUEST>
+RYVEN 3.0 — M15.1
+LOCAL-FIRST MODEL ROUTER & HUGGING FACE MODEL MANAGER
+PHASE 1: ARCHITECTURE + HARDWARE/MODEL BENCHMARK ONLY
+
+IMPORTANT:
+DO NOT IMPLEMENT RANDOM FEATURES.
+DO NOT MODIFY EXISTING WORKING INTERNET, BROWSER, OR ORCHESTRATOR LOGIC.
+DO NOT BREAK ANY EXISTING TESTS.
+DO NOT DOWNLOAD LARGE MODELS YET.
+DO NOT MAKE REMOTE HUGGING FACE INFERENCE THE DEFAULT.
+
+FIRST inspect the entire existing RYVEN repository and understand the current architecture.
+
+CURRENT VERIFIED BASELINE:
+- Backend: FastAPI
+- Frontend: React
+- Ollama: 0.35.0
+- Current local model: qwen2.5:7b
+- Existing AIProvider / OllamaProvider
+- ToolRegistry
+- CapabilityRouter
+- AgentPlanner
+- OrchestratorEngine
+- ActionEngine / ActionEventBus
+- InternetAgent
+- BrowserEngine
+- Knowledge Graph
+- DEV ENGINE
+- Git Engine
+- Deployment Engine
+- Health Monitoring
+- 646/646 backend tests passing
+- M15 Unified Internet Agent complete
+- 77 registered tools
+- Frontend TypeScript currently clean
+
+PRIMARY OBJECTIVE:
+
+Create the foundation for a LOCAL-FIRST MODEL ROUTER.
+
+The router must eventually decide:
+
+1. Normal reasoning/planning
+   → Ollama Qwen 2.5 7B
+
+2. Vision tasks
+   → suitable LOCAL vision model
+
+3. OCR tasks
+   → suitable LOCAL OCR model
+
+4. Embedding / semantic retrieval
+   → suitable LOCAL embedding model
+
+5. Speech/audio tasks
+   → suitable LOCAL speech model
+
+6. Code understanding
+   → only if benchmarking proves a specialized model is useful
+
+7. Remote Hugging Face inference
+   → NEVER default
+   → ONLY when explicitly allowed by configuration/user policy
+   → NEVER automatically send sensitive/private data
+
+PHASE 1 MUST BE BENCHMARK + ARCHITECTURE ONLY.
+
+STEP 1 — REPOSITORY AUDIT
+
+Inspect and document:
+
+- existing AIProvider architecture
+- OllamaProvider
+- model invocation flow
+- AgentPlanner
+- CapabilityRouter
+- ToolRegistry
+- OrchestratorEngine
+- InternetAgent
+- Knowledge Graph
+- ActionEventBus
+- configuration/env handling
+- current test structure
+
+Identify the safest integration point for ModelRouter.
+
+DO NOT rewrite existing architecture.
+
+STEP 2 — HARDWARE CAPABILITY DETECTION
+
+Create a read-only diagnostic service that detects:
+
+- OS
+- CPU
+- RAM
+- GPU availability
+- GPU vendor
+- VRAM if safely detectable
+- available disk space
+- Ollama availability
+- installed Ollama models
+- approximate model sizes
+
+This diagnostic MUST NOT:
+- modify registry
+- execute arbitrary shell commands
+- install software
+- download models
+- expose secrets
+
+Use existing safe system tooling where possible.
+
+STEP 3 — CURRENT MODEL BENCHMARK
+
+Benchmark the currently installed:
+
+qwen2.5:7b
+
+Measure:
+
+- model availability
+- cold-start latency
+- warm-start latency
+- response latency
+- tokens/sec if available
+- memory impact if safely measurable
+- failure behavior
+- concurrent request behavior
+
+Use deterministic benchmark prompts.
+
+Example prompts:
+
+A:
+"Explain what an API is in simple terms."
+
+B:
+"Plan the steps required to create a React project called TaskFlow."
+
+C:
+"Identify whether this request requires a browser, filesystem, Git, deployment, or normal reasoning."
+
+D:
+"Calculate 125 * 48 and explain the result."
+
+Do NOT benchmark by modifying projects.
+
+STEP 4 — MODEL REGISTRY DESIGN
+
+Design a typed model registry.
+
+Suggested conceptual model:
+
+ModelProfile:
+- id
+- provider
+- task_types
+- local_or_remote
+- model_name
+- capabilities
+- memory_estimate
+- context_length
+- enabled
+- installed
+- sensitive_data_allowed
+- priority
+
+TaskType examples:
+
+GENERAL_REASONING
+PLANNING
+CODE
+VISION
+OCR
+EMBEDDING
+SPEECH_TO_TEXT
+TEXT_TO_SPEECH
+CLASSIFICATION
+
+Provider examples:
+
+OLLAMA
+HUGGINGFACE_LOCAL
+HUGGINGFACE_REMOTE
+
+Do NOT hardcode only these if the architecture needs extensibility.
+
+STEP 5 — MODEL ROUTER DESIGN
+
+Create a deterministic routing policy.
+
+Example:
+
+GENERAL_REASONING
+→ Qwen 2.5 7B
+
+PLANNING
+→ Qwen 2.5 7B
+
+CODE
+→ Qwen 2.5 7B initially
+
+VISION
+→ local vision model only if installed and compatible
+
+OCR
+→ local OCR model only if installed
+
+EMBEDDING
+→ local embedding model if installed
+
+REMOTE MODEL
+→ disabled by default
+
+The router must return an explainable decision such as:
+
+{
+  selected_model: "...",
+  provider: "...",
+  task_type: "...",
+  reason: "...",
+  fallback: "...",
+  remote_allowed: false
+}
+
+STEP 6 — SECURITY POLICY
+
+Create a model security policy.
+
+Rules:
+
+- Local models may process local/private data according to tool permissions.
+- Remote models must be opt-in.
+- Secrets must never be sent to remote inference.
+- .env files must never be sent.
+- private keys must never be sent.
+- credentials/cookies/tokens must never be sent.
+- browser authentication data must never be sent.
+- arbitrary file contents must not be uploaded automatically.
+- remote inference must produce an auditable ActionEvent.
+
+STEP 7 — HUGGING FACE MODEL MANAGER DESIGN
+
+Design the manager but DO NOT download models yet.
+
+It should eventually support:
+
+- model catalog
+- model metadata
+- installed/uninstalled state
+- compatibility check
+- RAM/VRAM requirement
+- download size
+- local cache path
+- enable/disable
+- load/unload
+- health check
+- benchmark result
+
+Use lazy loading.
+
+Never load every model simultaneously.
+
+STEP 8 — TESTS
+
+Add tests for:
+
+- hardware detection safety
+- model registry
+- model routing
+- default Qwen routing
+- remote inference disabled by default
+- sensitive data protection
+- fallback behavior
+- unavailable model handling
+- invalid model configuration
+- deterministic routing
+
+Do not modify existing tests unnecessarily.
+
+STEP 9 — OUTPUT
+
+Before changing implementation significantly, provide:
+
+1. Repository architecture findings
+2. Current model flow
+3. Hardware detection findings
+4. Qwen 2.5 7B benchmark results
+5. Proposed ModelRouter architecture
+6. Proposed HuggingFaceModelManager architecture
+7. Security policy
+8. Exact files that need to be created/modified
+9. Risks
+10. Recommended next implementation step
+
+IMPORTANT:
+For this phase, prioritize OBSERVATION, BENCHMARKING and ARCHITECTURE.
+
+Do not download any new AI model.
+Do not remove Qwen.
+Do not replace Ollama.
+Do not modify InternetAgent.
+Do not modify BrowserEngine.
+Do not modify OrchestratorEngine unless absolutely required for a clean integration point.
+
+At the end run the existing test suite and report:
+
+- baseline tests
+- new tests
+- total tests
+- passed
+- failed
+- frontend TypeScript status
+- files changed
+- whether any existing behavior changed
+
+SUCCESS CRITERIA:
+
+No regression.
+Existing RYVEN functionality remains intact.
+Current Qwen workflow remains the default.
+Model routing architecture is clearly defined.
+Hardware/model benchmark data is available.
+No large model downloads occurred.
+Remote Hugging Face is disabled by default.
+</USER_REQUEST>
+<ADDITIONAL_METADATA>
+The current local time is: 2026-10-03T00:42:51+05:30.
+
+The user's current state is as follows:
+Active Document: e:\project\project\view-archive-buddy-main\M14_2_FINAL_AUDIT.md (LANGUAGE_MARKDOWN)
+Cursor is on line: 19
+Other open documents:
+- e:\project\project\view-archive-buddy-main\M13_FINAL_AUDIT.md (LANGUAGE_MARKDOWN)
+- e:\project\project\view-archive-buddy-main\backend\scratch\verify_ryven_3_live.py (LANGUAGE_PYTHON)
+- e:\project\project\view-archive-buddy-main\M14_2_FINAL_AUDIT.md (LANGUAGE_MARKDOWN)
+- e:\project\project\view-archive-buddy-main\M14_REAL_WORLD_VERIFICATION.md (LANGUAGE_MARKDOWN)
+- e:\project\project\view-archive-buddy-main\M14_FINAL_AUDIT.md (LANGUAGE_MARKDOWN)
+Browser State:
+  Page ACBBFE238FC615825FCE863E98D03EA9 (RYVEN — Personal AI Assistant) - http://localhost:8080/ [ACTIVE]
+    Viewport: 506x806, Page Height: 806
+</ADDITIONAL_METADATA>
+<USER_SETTINGS_CHANGE>
+The user changed setting `Model Selection` from Gemini 3.8 Flash (High) to Gemini 3.8 Flash (Medium). No need to comment on this change if the user doesn't ask about it. If reporting what model you are, please use a human readable name instead of the exact string.
+</USER_SETTINGS_CHANGE>

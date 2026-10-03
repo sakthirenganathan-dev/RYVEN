@@ -54,7 +54,7 @@ class WorkflowEngine:
         return workflow
 
     async def execute_workflow(
-        self, workflow: WorkflowDefinition, auto_confirm: bool = True
+        self, workflow: WorkflowDefinition, auto_confirm: bool = False
     ) -> WorkflowExecutionResult:
         """Validate and sequentially execute a workflow."""
         self._active_workflows[workflow.workflow_id] = workflow
@@ -80,7 +80,7 @@ class WorkflowEngine:
         return result
 
     async def run_from_query(
-        self, query: str, auto_confirm: bool = True
+        self, query: str, auto_confirm: bool = False
     ) -> Optional[WorkflowExecutionResult]:
         """High-level entry point: Plan, validate, and execute in one coordinated run."""
         workflow = self.plan_workflow(query)
@@ -89,14 +89,47 @@ class WorkflowEngine:
 
         return await self.execute_workflow(workflow, auto_confirm=auto_confirm)
 
-    async def resume_workflow(self, workflow_id: str) -> Optional[WorkflowExecutionResult]:
-        """Resume execution of a workflow paused in WAITING_FOR_CONFIRMATION state."""
+    async def resume_workflow(
+        self,
+        workflow_id: str,
+        confirmed_step_id: Optional[str] = None,
+    ) -> Optional[WorkflowExecutionResult]:
+        """Resume exactly one step after explicit confirmation of its step ID."""
         workflow = self._active_workflows.get(workflow_id)
         if not workflow or workflow.status != WorkflowState.WAITING_FOR_CONFIRMATION:
             return None
 
-        logger.info(f"Resuming confirmed workflow '{workflow.name}' (ID: {workflow_id})")
-        return await self.executor.execute(workflow, auto_confirm=True)
+        if not 0 <= workflow.current_step_index < len(workflow.steps):
+            return None
+
+        pending_step = workflow.steps[workflow.current_step_index]
+        if (
+            not confirmed_step_id
+            or confirmed_step_id != pending_step.step_id
+            or not self.confirmation_mgr.requires_confirmation(pending_step)
+        ):
+            return WorkflowExecutionResult(
+                workflow_id=workflow.workflow_id,
+                name=workflow.name,
+                status=WorkflowState.WAITING_FOR_CONFIRMATION,
+                success=False,
+                message=f"Workflow remains paused: explicit confirmation for step '{pending_step.name}' is required.",
+                steps_total=workflow.total_steps,
+                steps_completed=workflow.steps_completed,
+                steps_failed=workflow.steps_failed,
+                metadata={
+                    "pending_step_id": pending_step.step_id,
+                    "pending_tool": pending_step.tool_name,
+                    "confirmation_required": True,
+                },
+            )
+
+        logger.info(f"Resuming confirmed workflow '{workflow.name}' (ID: {workflow_id}, step='{pending_step.step_id}')")
+        return await self.executor.execute(
+            workflow,
+            auto_confirm=False,
+            confirmed_step_ids={pending_step.step_id},
+        )
 
     def cancel_workflow(self, workflow_id: str) -> bool:
         """Signal a workflow to cancel execution safely."""

@@ -354,7 +354,11 @@ export async function executeRyvenCommand(
         });
       }
 
-      const filesCount = res.metadata?.["files_count"] ?? (Array.isArray(res.metadata?.["files"]) ? (res.metadata["files"] as unknown[]).length : undefined);
+      const filesCount =
+        res.metadata?.["files_count"] ??
+        (Array.isArray(res.metadata?.["files"])
+          ? (res.metadata["files"] as unknown[]).length
+          : undefined);
       if (filesCount !== undefined) {
         steps.push({
           label: "Code Generation",

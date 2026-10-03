@@ -9,7 +9,13 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { createReplay, fetchTaskEvents, replayNext, replayPrevious, replayRestart } from "@/services/actions";
+import {
+  createReplay,
+  fetchTaskEvents,
+  replayNext,
+  replayPrevious,
+  replayRestart,
+} from "@/services/actions";
 import { TaskTimeline } from "@/components/developer/TaskTimeline";
 import type { ActionEvent, ReplayFrame } from "@/types/actions";
 
@@ -37,10 +43,7 @@ export function ReplayPlayer({ taskId, goal }: ReplayPlayerProps) {
 
   // Load replay session from backend (read-only)
   const loadReplay = useCallback(async () => {
-    const [events, session] = await Promise.all([
-      fetchTaskEvents(taskId),
-      createReplay(taskId),
-    ]);
+    const [events, session] = await Promise.all([fetchTaskEvents(taskId), createReplay(taskId)]);
 
     if (!session) {
       setIsLoaded(false);
@@ -116,11 +119,7 @@ export function ReplayPlayer({ taskId, goal }: ReplayPlayerProps) {
   }, [taskId, stopPlayback]);
 
   if (!isLoaded) {
-    return (
-      <div className="text-[10px] text-muted-foreground px-1 py-2">
-        Loading replay…
-      </div>
-    );
+    return <div className="text-[10px] text-muted-foreground px-1 py-2">Loading replay…</div>;
   }
 
   const frameIndex = currentFrame?.frame_index ?? 0;
@@ -146,10 +145,7 @@ export function ReplayPlayer({ taskId, goal }: ReplayPlayerProps) {
       </div>
 
       {/* Frame counter */}
-      <div
-        className="text-[9px] text-muted-foreground"
-        style={{ fontFamily: "var(--font-mono)" }}
-      >
+      <div className="text-[9px] text-muted-foreground" style={{ fontFamily: "var(--font-mono)" }}>
         Frame {frameIndex + 1} / {totalFrames}
       </div>
 

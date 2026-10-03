@@ -4,10 +4,14 @@ import { HUDPanel } from "@/components/hud/HUDPanel";
 import { StatusIndicator } from "@/components/hud/StatusIndicator";
 import { LiveActivityPanel } from "@/components/developer/LiveActivityPanel";
 import { BrowserActivityPanel } from "@/components/developer/BrowserActivityPanel";
+import { AgentControlPanel } from "@/components/developer/AgentControlPanel";
+import { ModelStatusPanel } from "@/components/developer/ModelStatusPanel";
+import { RuntimePanel } from "@/components/developer/RuntimePanel";
+import { SwarmPanel } from "@/components/developer/SwarmPanel";
 
 const tone = { RUNNING: "signal", READY: "holo", BUILDING: "violet" } as const;
 
-type DeveloperView = "projects" | "activity" | "browser";
+type DeveloperView = "projects" | "activity" | "browser" | "agent" | "models" | "runtime" | "swarm";
 
 export function DeveloperHUD() {
   const [view, setView] = useState<DeveloperView>("projects");
@@ -16,7 +20,7 @@ export function DeveloperHUD() {
     <HUDPanel title="Developer environment" code="DEV.04" className="w-[340px]" tilt={-4}>
       <div className="space-y-3">
         {/* View toggle */}
-        <div className="flex gap-1 border-b border-border/40 pb-2">
+        <div className="flex gap-1 border-b border-border/40 pb-2 overflow-x-auto">
           <button
             type="button"
             onClick={() => setView("projects")}
@@ -52,6 +56,54 @@ export function DeveloperHUD() {
             style={{ fontFamily: "var(--font-mono)" }}
           >
             BROWSER
+          </button>
+          <button
+            type="button"
+            onClick={() => setView("agent")}
+            className={`px-2 py-0.5 text-[9px] rounded transition-colors tracking-widest ${
+              view === "agent"
+                ? "bg-holo/20 text-holo border border-holo/40"
+                : "text-muted-foreground hover:text-foreground"
+            }`}
+            style={{ fontFamily: "var(--font-mono)" }}
+          >
+            AGENT
+          </button>
+          <button
+            type="button"
+            onClick={() => setView("models")}
+            className={`px-2 py-0.5 text-[9px] rounded transition-colors tracking-widest ${
+              view === "models"
+                ? "bg-holo/20 text-holo border border-holo/40"
+                : "text-muted-foreground hover:text-foreground"
+            }`}
+            style={{ fontFamily: "var(--font-mono)" }}
+          >
+            MODELS
+          </button>
+          <button
+            type="button"
+            onClick={() => setView("runtime")}
+            className={`px-2 py-0.5 text-[9px] rounded transition-colors tracking-widest ${
+              view === "runtime"
+                ? "bg-holo/20 text-holo border border-holo/40"
+                : "text-muted-foreground hover:text-foreground"
+            }`}
+            style={{ fontFamily: "var(--font-mono)" }}
+          >
+            RUNTIME
+          </button>
+          <button
+            type="button"
+            onClick={() => setView("swarm")}
+            className={`px-2 py-0.5 text-[9px] rounded transition-colors tracking-widest ${
+              view === "swarm"
+                ? "bg-holo/20 text-holo border border-holo/40"
+                : "text-muted-foreground hover:text-foreground"
+            }`}
+            style={{ fontFamily: "var(--font-mono)" }}
+          >
+            SWARM
           </button>
         </div>
 
@@ -114,6 +166,18 @@ export function DeveloperHUD() {
 
         {/* Browser Activity view */}
         {view === "browser" && <BrowserActivityPanel />}
+
+        {/* Agent Control Plane view */}
+        {view === "agent" && <AgentControlPanel />}
+
+        {/* Multi-Model Routing Status view */}
+        {view === "models" && <ModelStatusPanel />}
+
+        {/* Runtime Performance & Resources view */}
+        {view === "runtime" && <RuntimePanel />}
+
+        {/* M16.0 Multi-Agent Swarm view */}
+        {view === "swarm" && <SwarmPanel />}
       </div>
     </HUDPanel>
   );

@@ -190,6 +190,28 @@ class OrchestrationTask(BaseModel):
         )
         self.checkpoints.append(chk)
         self.updated_at = utc_now_iso()
+
+        try:
+            from app.runtime.checkpoint_store import checkpoint_store
+            completed = [s.step_id for s in (self.plan.steps if self.plan else []) if s.status.value == "SUCCESS"]
+            pending = [s.step_id for s in (self.plan.steps if self.plan else []) if s.status.value == "PENDING"]
+            step_details = [s.model_dump() for s in (self.plan.steps if self.plan else [])]
+            retry_counts = {s.step_id: s.retry_count for s in (self.plan.steps if self.plan else [])}
+            checkpoint_store.save_checkpoint(
+                task_id=self.task_id,
+                user_goal=self.user_goal,
+                project_name=self.project_name,
+                current_state=self.status.value,
+                current_step_id=step_id,
+                completed_steps=completed,
+                pending_steps=pending,
+                step_details=step_details,
+                retry_counts=retry_counts,
+                metadata={"checkpoint_name": name, "status": status, "summary": summary, **(metadata or {})},
+            )
+        except Exception:
+            pass
+
         return chk
 
     def record_checkpoint(self, checkpoint_name: str, summary: str = "", step_id: str = "step-none", status: str = "SUCCESS") -> ExecutionCheckpoint:

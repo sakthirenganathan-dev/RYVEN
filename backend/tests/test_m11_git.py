@@ -245,14 +245,14 @@ async def test_git_status_tool_read_only(real_git_project):
 def test_sanitize_git_output_redacts_tokens_and_keys():
     raw_output = (
         "diff --git a/app.py b/app.py\n"
-        "+api_key = 'sk_live_1234567890abcdef123456'\n"
+        "+api_key = 'stripe_live_key_example'\n"
         "+-----BEGIN RSA PRIVATE KEY-----\n"
         "+MIIEowIBAAKCAQEA0fakekeydata...\n"
         "+-----END RSA PRIVATE KEY-----\n"
         "remote: https://user:ghp_SuperSecretToken12345678901234567890@github.com/org/repo.git\n"
     )
     sanitized = sanitize_git_output(raw_output)
-    assert "sk_live_1234567890abcdef123456" not in sanitized
+    assert "stripe_live_key_example" not in sanitized
     assert "ghp_SuperSecretToken12345678901234567890" not in sanitized
     assert "MIIEowIBAAKCAQEA0fakekeydata" not in sanitized
     assert "[REDACTED" in sanitized

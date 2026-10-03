@@ -26,9 +26,7 @@ export function useActionStream(): UseActionStreamResult {
     setEvents((prev) => {
       const next = [...prev, event];
       // Keep bounded — drop oldest when over limit
-      return next.length > MAX_LOCAL_EVENTS
-        ? next.slice(next.length - MAX_LOCAL_EVENTS)
-        : next;
+      return next.length > MAX_LOCAL_EVENTS ? next.slice(next.length - MAX_LOCAL_EVENTS) : next;
     });
   }, []);
 

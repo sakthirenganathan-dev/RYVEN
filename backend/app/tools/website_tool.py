@@ -101,8 +101,14 @@ class OpenWebsiteTool(BaseTool):
 
         try:
             logger.info(f"Opening validated website: {resolved_url}")
+            from app.internet.agent import internet_agent
+
+            # Route through unified InternetAgent navigation
+            nav_result = await internet_agent.navigation_service.open_url(resolved_url)
+
+            # Trigger default system browser launcher for desktop UX & test mock compatibility
             opened = webbrowser.open(resolved_url)
-            if opened:
+            if opened or nav_result.get("success"):
                 return {
                     "success": True,
                     "tool": self.name,

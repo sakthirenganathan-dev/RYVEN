@@ -64,6 +64,9 @@ class BrowserSnapshot(BaseModel):
     links: List[Dict[str, str]] = Field(default_factory=list)
     interactive_elements_count: int = 0
     raw_html_truncated: Optional[str] = None
+    # M15.2 Vision / OCR — optional, memory-only, never written to disk or logs
+    screenshot_b64: Optional[str] = None
+    ocr_text: Optional[str] = None
 
 
 class BrowserActionRecord(BaseModel):

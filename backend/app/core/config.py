@@ -42,6 +42,33 @@ class Settings(BaseModel):
         default_factory=lambda: float(os.getenv("OLLAMA_TIMEOUT_SECONDS", "120.0"))
     )
 
+    # Grok API Provider (M15.1 - Optional / Opt-in)
+    grok_api_key: str | None = Field(default_factory=lambda: os.getenv("GROK_API_KEY"))
+    grok_base_url: str = Field(
+        default_factory=lambda: os.getenv("GROK_BASE_URL", "https://api.x.ai/v1").rstrip("/")
+    )
+    grok_model: str = Field(default_factory=lambda: os.getenv("GROK_MODEL", "grok-2-latest"))
+    grok_timeout_seconds: float = Field(
+        default_factory=lambda: float(os.getenv("GROK_TIMEOUT_SECONDS", "60.0"))
+    )
+
+    # Hugging Face Provider (M15.1 - Optional / Opt-in)
+    hf_api_key: str | None = Field(default_factory=lambda: os.getenv("HF_API_KEY"))
+    hf_base_url: str = Field(
+        default_factory=lambda: os.getenv("HF_BASE_URL", "https://api-inference.huggingface.co/v1").rstrip("/")
+    )
+    hf_model: str = Field(
+        default_factory=lambda: os.getenv("HF_MODEL", "Qwen/Qwen2.5-Coder-32B-Instruct")
+    )
+    hf_timeout_seconds: float = Field(
+        default_factory=lambda: float(os.getenv("HF_TIMEOUT_SECONDS", "60.0"))
+    )
+
+    # Remote AI Inference Global Gate (Disabled by default)
+    allow_remote_ai_inference: bool = Field(
+        default_factory=lambda: os.getenv("ALLOW_REMOTE_AI_INFERENCE", "false").lower() in ("true", "1", "yes")
+    )
+
     # Conversation Context
     max_history_messages: int = Field(
         default_factory=lambda: int(os.getenv("MAX_HISTORY_MESSAGES", "20"))

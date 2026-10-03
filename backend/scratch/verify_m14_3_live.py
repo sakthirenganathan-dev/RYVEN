@@ -110,7 +110,7 @@ async def main():
 
         # Test 7: Protected credential masking
         from app.browser.security import BrowserSecurityValidator
-        dirty_text = "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.e30.t-IDN context with secret sk_live_abcdef1234567890 and password123!"
+        dirty_text = "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.e30.t-IDN context with secret stripe_live_key_example and password123!"
         sanitized = BrowserSecurityValidator.redact_credentials(dirty_text)
         print(f"[9] Credential Redaction: '{dirty_text[:35]}...' -> '{sanitized[:35]}...'")
         assert "sk_live_" not in sanitized

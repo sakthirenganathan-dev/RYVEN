@@ -107,9 +107,7 @@ export function LiveActivityPanel() {
   // Show most recent 10 events for the activity panel
   const visibleEvents = events.slice(-10);
   const currentEvent =
-    latestEvent?.status === "STARTED" || latestEvent?.status === "PROGRESS"
-      ? latestEvent
-      : null;
+    latestEvent?.status === "STARTED" || latestEvent?.status === "PROGRESS" ? latestEvent : null;
 
   return (
     <div className="flex flex-col gap-2">

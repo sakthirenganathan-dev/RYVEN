@@ -1,0 +1,135 @@
+<USER_REQUEST>
+RYVEN 3.0 — M15.1
+LOCAL-FIRST MODEL ROUTER & HUGGING FACE MODEL MANAGER
+PHASE 1: ARCHITECTURE + HARDWARE/MODEL BENCHMARK ONLY
+
+IMPORTANT:
+DO NOT IMPLEMENT RANDOM FEATURES.
+DO NOT MODIFY EXISTING WORKING INTERNET, BROWSER, OR ORCHESTRATOR LOGIC.
+DO NOT BREAK ANY EXISTING TESTS.
+DO NOT DOWNLOAD LARGE MODELS YET.
+DO NOT MAKE REMOTE HUGGING FACE INFERENCE THE DEFAULT.
+
+FIRST inspect the entire existing RYVEN repository and understand the current architecture.
+
+CURRENT VERIFIED BASELINE:
+- Backend: FastAPI
+- Frontend: React
+- Ollama: 0.35.0
+- Current local model: qwen2.5:7b
+- Existing AIProvider / OllamaProvider
+- ToolRegistry
+- CapabilityRouter
+- AgentPlanner
+- OrchestratorEngine
+- ActionEngine / ActionEventBus
+- InternetAgent
+- BrowserEngine
+- Knowledge Graph
+- DEV ENGINE
+- Git Engine
+- Deployment Engine
+- Health Monitoring
+- 646/646 backend tests passing
+- M15 Unified Internet Agent complete
+- 77 registered tools
+- Frontend TypeScript currently clean
+
+PRIMARY OBJECTIVE:
+
+Create the foundation for a LOCAL-FIRST MODEL ROUTER.
+
+The router must eventually decide:
+
+1. Normal reasoning/planning
+   → Ollama Qwen 2.5 7B
+
+2. Vision tasks
+   → suitable LOCAL vision model
+
+3. OCR tasks
+   → suitable LOCAL OCR model
+
+4. Embedding / semantic retrieval
+   → suitable LOCAL embedding model
+
+5. Speech/audio tasks
+   → suitable LOCAL speech model
+
+6. Code understanding
+   → only if benchmarking proves a specialized model is useful
+
+7. Remote Hugging Face inference
+   → NEVER default
+   → ONLY when explicitly allowed by configuration/user policy
+   → NEVER automatically send sensitive/private data
+
+PHASE 1 MUST BE BENCHMARK + ARCHITECTURE ONLY.
+
+STEP 1 — REPOSITORY AUDIT
+
+Inspect and document:
+
+- existing AIProvider architecture
+- OllamaProvider
+- model invocation flow
+- AgentPlanner
+- CapabilityRouter
+- ToolRegistry
+- OrchestratorEngine
+- InternetAgent
+- Knowledge Graph
+- ActionEventBus
+- configuration/env handling
+
+<truncated 4192 bytes>
+:
+For this phase, prioritize OBSERVATION, BENCHMARKING and ARCHITECTURE.
+
+Do not download any new AI model.
+Do not remove Qwen.
+Do not replace Ollama.
+Do not modify InternetAgent.
+Do not modify BrowserEngine.
+Do not modify OrchestratorEngine unless absolutely required for a clean integration point.
+
+At the end run the existing test suite and report:
+
+- baseline tests
+- new tests
+- total tests
+- passed
+- failed
+- frontend TypeScript status
+- files changed
+- whether any existing behavior changed
+
+SUCCESS CRITERIA:
+
+No regression.
+Existing RYVEN functionality remains intact.
+Current Qwen workflow remains the default.
+Model routing architecture is clearly defined.
+Hardware/model benchmark data is available.
+No large model downloads occurred.
+Remote Hugging Face is disabled by default.
+</USER_REQUEST>
+<ADDITIONAL_METADATA>
+The current local time is: 2026-10-03T00:42:51+05:30.
+
+The user's current state is as follows:
+Active Document: e:\project\project\view-archive-buddy-main\M14_2_FINAL_AUDIT.md (LANGUAGE_MARKDOWN)
+Cursor is on line: 19
+Other open documents:
+- e:\project\project\view-archive-buddy-main\M13_FINAL_AUDIT.md (LANGUAGE_MARKDOWN)
+- e:\project\project\view-archive-buddy-main\backend\scratch\verify_ryven_3_live.py (LANGUAGE_PYTHON)
+- e:\project\project\view-archive-buddy-main\M14_2_FINAL_AUDIT.md (LANGUAGE_MARKDOWN)
+- e:\project\project\view-archive-buddy-main\M14_REAL_WORLD_VERIFICATION.md (LANGUAGE_MARKDOWN)
+- e:\project\project\view-archive-buddy-main\M14_FINAL_AUDIT.md (LANGUAGE_MARKDOWN)
+Browser State:
+  Page ACBBFE238FC615825FCE863E98D03EA9 (RYVEN — Personal AI Assistant) - http://localhost:8080/ [ACTIVE]
+    Viewport: 506x806, Page Height: 806
+</ADDITIONAL_METADATA>
+<USER_SETTINGS_CHANGE>
+The user changed setting `Model Selection` from Gemini 3.8 Flash (High) to Gemini 3.8 Flash (Medium). No need to comment on this change if the user doesn't ask about it. If reporting what model you are, please use a human readable name instead of the exact string.
+</USER_SETTINGS_CHANGE>

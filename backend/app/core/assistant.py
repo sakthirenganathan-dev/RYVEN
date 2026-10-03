@@ -34,6 +34,7 @@ class Assistant:
         system_prompt: Optional[str] = None,
         safety: Optional[SafetyGuard] = None,
         workflow_engine: Optional[WorkflowEngine] = None,
+        agent_engine: Optional[Any] = None,
     ) -> None:
         # 1. Safe Tool Registry with all registered tools
         if registry is None:
@@ -57,7 +58,14 @@ class Assistant:
         # 6. Safety & Permission Guard
         self.safety_guard = safety or safety_guard
 
-        # 7. Workflow Engine (Phase 4)
+        # 7. One agent control plane sharing this assistant's registry and guard
+        if agent_engine is None:
+            from app.agent.engine import AgentEngine
+            self.agent_engine = AgentEngine(registry=self.registry, guard=self.safety_guard)
+        else:
+            self.agent_engine = agent_engine
+
+        # 8. Workflow Engine (Phase 4)
         self.workflow_engine = workflow_engine or WorkflowEngine(
             registry=self.registry,
             guard=self.safety_guard,
@@ -72,7 +80,7 @@ class Assistant:
         self,
         message: str,
         session_id: str = "default",
-        auto_confirm: bool = True,
+        auto_confirm: bool = False,
     ) -> ChatResponse:
         """Process incoming user message through security validation, intent classification, workflows, tools, or AI with context."""
         clean_text = message.strip()
@@ -104,6 +112,41 @@ class Assistant:
 
         # 2. Workflow Execution Path (Phase 4 & 4.1)
         if decision.intent == "workflow":
+            if self.agent_engine and hasattr(self.agent_engine, "execute_workflow_goal"):
+                logger.info(f"Executing workflow via AgentEngine for intent: '{decision.workflow_name}'")
+                agent_result = await self.agent_engine.execute_workflow_goal(clean_text)
+                if agent_result:
+                    display_message = agent_result.message
+                    self.context_manager.add_user_message(session_id, clean_text)
+                    self.context_manager.add_assistant_message(session_id, display_message)
+
+                    output_dict = (
+                        agent_result.final_output
+                        if hasattr(agent_result, "final_output") and isinstance(agent_result.final_output, dict)
+                        else {}
+                    )
+                    status_val = (
+                        agent_result.status.value
+                        if hasattr(agent_result.status, "value")
+                        else str(agent_result.status)
+                    )
+                    return ChatResponse(
+                        success=agent_result.success,
+                        type="workflow",
+                        message=display_message,
+                        tool=None,
+                        metadata={
+                            "workflow_id": agent_result.task_id,
+                            "name": decision.workflow_name,
+                            "status": status_val,
+                            "steps_total": agent_result.steps_total,
+                            "steps_completed": agent_result.steps_completed,
+                            "steps_failed": agent_result.steps_failed,
+                            "steps": output_dict.get("steps", []),
+                            **output_dict,
+                        },
+                    )
+
             logger.info(f"Executing workflow for intent: '{decision.workflow_name}'")
             wf_result = await self.workflow_engine.run_from_query(
                 clean_text, auto_confirm=auto_confirm
@@ -133,6 +176,35 @@ class Assistant:
 
             logger.warning("Workflow planning returned None. Falling back to AI.")
 
+        # 2.5 Agent Execution Path (RYVEN 3.0 Control Plane)
+        if decision.intent == "agent":
+            logger.info(f"[ASSISTANT] Executing agent plan for composite goal: '{clean_text}'")
+            agent_result = await self.agent_engine.execute_goal(
+                goal=clean_text,
+                session_id=session_id,
+                auto_confirm=auto_confirm,
+            )
+            display_message = agent_result.message
+            self.context_manager.add_user_message(session_id, clean_text)
+            self.context_manager.add_assistant_message(session_id, display_message)
+
+            return ChatResponse(
+                success=agent_result.success,
+                type="agent",
+                message=display_message,
+                tool=None,
+                metadata={
+                    "task_id": agent_result.task_id,
+                    "status": agent_result.status.value,
+                    "steps_total": agent_result.steps_total,
+                    "steps_completed": agent_result.steps_completed,
+                    "steps_failed": agent_result.steps_failed,
+                    "observations": [obs.model_dump() for obs in agent_result.observations],
+                    "duration_ms": agent_result.duration_ms,
+                    **agent_result.final_output,
+                },
+            )
+
         # 3. Tool Execution Path (Phase 3)
         if decision.intent == "tool" and decision.tool_name:
             # Permission check before executing tool
@@ -156,14 +228,15 @@ class Assistant:
             if tool:
                 logger.info(f"Executing registered tool: '{tool.name}' with args {decision.tool_arguments}")
                 try:
-                    tool_output = await self.registry.execute_tool(
-                        name=tool.name,
+                    agent_result = await self.agent_engine.execute_tool_request(
+                        goal=clean_text,
+                        tool_name=tool.name,
                         arguments=decision.tool_arguments,
+                        session_id=session_id,
                     )
-                    display_message = tool_output.get(
-                        "message", f"Tool {tool.name} executed successfully."
-                    )
-                    is_success = tool_output.get("success", True)
+                    tool_output = agent_result.final_output.get("tool_output", {})
+                    display_message = tool_output.get("message") or agent_result.message
+                    is_success = agent_result.success and tool_output.get("success", True)
 
                     # Update session history with the tool interaction
                     self.context_manager.add_user_message(session_id, clean_text)
@@ -174,7 +247,15 @@ class Assistant:
                         type="tool",
                         message=display_message,
                         tool=tool.name,
-                        metadata=tool_output,
+                        metadata={
+                            "task_id": agent_result.task_id,
+                            "status": agent_result.status.value,
+                            "steps_total": agent_result.steps_total,
+                            "steps_completed": agent_result.steps_completed,
+                            "steps_failed": agent_result.steps_failed,
+                            "observations": [obs.model_dump() for obs in agent_result.observations],
+                            **tool_output,
+                        },
                     )
                 except Exception as exc:
                     logger.error(f"Error executing tool '{tool.name}': {exc}", exc_info=True)

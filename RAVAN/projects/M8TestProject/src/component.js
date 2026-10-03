@@ -1,1 +1,3 @@
-export function Component() { return null; }
+export function Component() {
+  return null;
+}

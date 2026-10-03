@@ -92,12 +92,18 @@ class ConfirmationManager:
     }
 
 
-    def requires_confirmation(self, step: WorkflowStep) -> bool:
-        """Determine whether a step must pause for user confirmation before executing."""
-        if step.requires_confirmation:
+    def requires_confirmation(self, step_or_tool: Any, arguments: Optional[Dict[str, Any]] = None) -> bool:
+        """Determine whether a step or tool must pause for user confirmation before executing."""
+        if hasattr(step_or_tool, "requires_confirmation") and step_or_tool.requires_confirmation:
             return True
 
-        tool_name = step.tool_name.lower().strip()
+        if hasattr(step_or_tool, "tool_name"):
+            tool_name = step_or_tool.tool_name.lower().strip()
+        elif isinstance(step_or_tool, str):
+            tool_name = step_or_tool.lower().strip()
+        else:
+            return True
+
         if tool_name in self.SAFE_AUTO_EXECUTE_TOOLS:
             return False
 

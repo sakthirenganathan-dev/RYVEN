@@ -30,10 +30,7 @@ export async function fetchTaskEvents(taskId: string): Promise<ActionEvent[]> {
   }
 }
 
-export async function fetchTaskSummary(
-  taskId: string,
-  goal = "",
-): Promise<TaskSummary | null> {
+export async function fetchTaskSummary(taskId: string, goal = ""): Promise<TaskSummary | null> {
   try {
     const url = `${RYVEN_API_BASE_URL}/api/actions/task/${encodeURIComponent(taskId)}/summary?goal=${encodeURIComponent(goal)}`;
     const res = await fetch(url);

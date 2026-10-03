@@ -9,7 +9,7 @@ from app.core.logging_config import logger
 class RouteDecision(BaseModel):
     """Decision indicating whether to execute a tool, a workflow, or delegate to the AI engine."""
 
-    intent: Literal["tool", "ai", "workflow"]
+    intent: Literal["tool", "ai", "workflow", "agent"]
     tool_name: Optional[str] = None
     tool_arguments: Dict[str, Any] = Field(default_factory=dict)
     workflow_name: Optional[str] = None
@@ -120,6 +120,18 @@ class IntentRouter:
     )
     BROWSER_CLOSE_PATTERN = re.compile(
         r"\b(?:close|quit)\s+(?:the\s+)?browser\b",
+        re.IGNORECASE,
+    )
+    BROWSER_BACK_PATTERN = re.compile(
+        r"^\s*(?:go\s+back|browser\s+back|go\s+to\s+previous\s+page)\s*$",
+        re.IGNORECASE,
+    )
+    BROWSER_FORWARD_PATTERN = re.compile(
+        r"^\s*(?:go\s+forward|return\s+forward|browser\s+forward|go\s+to\s+next\s+page)\s*$",
+        re.IGNORECASE,
+    )
+    BROWSER_REFRESH_PATTERN = re.compile(
+        r"^\s*(?:refresh(?:\s+the)?\s+(?:page|browser)|reload(?:\s+the)?\s+(?:page|browser))\s*$",
         re.IGNORECASE,
     )
 
@@ -386,6 +398,43 @@ class IntentRouter:
             logger.info(f"Router decision: tool='open_folder' folder='{folder_name}'")
             return decision
 
+        # 5.5 Composite Multi-Step Agent Goal (RYVEN 3.0 Control Plane)
+        from app.agent.planner import AgentPlanner
+        if AgentPlanner.is_composite_goal(clean_text) or re.search(r"\bsearch\s+(?:youtube|google)\s+(?:for\s+)?", clean_text, re.IGNORECASE):
+            decision = RouteDecision(
+                intent="agent",
+                reason=f"Matched composite multi-step agent goal: '{clean_text[:50]}...'",
+            )
+            logger.info(f"Router decision: agent for message='{raw_text[:40]}...'")
+            return decision
+
+        # 5.6 RYVEN 3.0 Unified Internet Agent Direct Capabilities
+        m_research = re.search(r"^\b(?:research|deep\s+research)\s+(?:the\s+)?(?:latest\s+)?(.+)$", clean_text, re.IGNORECASE)
+        if m_research:
+            topic = m_research.group(1).strip()
+            topic = re.sub(r"[.?!]+$", "", topic).strip()
+            decision = RouteDecision(
+                intent="tool",
+                tool_name="web_research",
+                tool_arguments={"topic": topic, "max_sources": 3},
+                reason=f"Matched web research request for '{topic}'",
+            )
+            logger.info(f"Router decision: tool='web_research' topic='{topic}'")
+            return decision
+
+        m_search = re.search(r"^\b(?:internet\s+search|web\s+search|search\s+(?:the\s+)?(?:web|internet)\s+for)\s+(.+)$", clean_text, re.IGNORECASE)
+        if m_search:
+            q = m_search.group(1).strip()
+            q = re.sub(r"[.?!]+$", "", q).strip()
+            decision = RouteDecision(
+                intent="tool",
+                tool_name="internet_search",
+                tool_arguments={"query": q, "max_results": 5},
+                reason=f"Matched internet search request for '{q}'",
+            )
+            logger.info(f"Router decision: tool='internet_search' query='{q}'")
+            return decision
+
         # 6. Open Application (VS Code, Chrome, Notepad, Calculator, Terminal)
         app_match = self.APP_PATTERN.search(clean_text)
         if app_match:
@@ -454,6 +503,36 @@ class IntentRouter:
                 reason="Matched controlled browser close request",
             )
             logger.info("Router decision: tool='close_browser'")
+            return decision
+
+        if self.BROWSER_BACK_PATTERN.search(clean_text):
+            decision = RouteDecision(
+                intent="tool",
+                tool_name="go_back",
+                tool_arguments={},
+                reason="Matched browser go back request",
+            )
+            logger.info("Router decision: tool='go_back'")
+            return decision
+
+        if self.BROWSER_FORWARD_PATTERN.search(clean_text):
+            decision = RouteDecision(
+                intent="tool",
+                tool_name="go_forward",
+                tool_arguments={},
+                reason="Matched browser go forward request",
+            )
+            logger.info("Router decision: tool='go_forward'")
+            return decision
+
+        if self.BROWSER_REFRESH_PATTERN.search(clean_text):
+            decision = RouteDecision(
+                intent="tool",
+                tool_name="refresh_page",
+                tool_arguments={},
+                reason="Matched browser refresh page request",
+            )
+            logger.info("Router decision: tool='refresh_page'")
             return decision
 
         # 8. Check for time queries
@@ -588,13 +667,13 @@ class IntentRouter:
             logger.info(f"Router decision: tool='git_unstage' for message='{raw_text[:40]}...'")
             return decision
 
-        # Status
-        if re.search(r"\b(?:check\s+(?:my\s+)?(?:project\s+)?git\s+status|git\s+status|check\s+git|what(?:\s+is|\s*'?s)?\s+(?:the\s+)?git\s+status)\b", clean_text, re.IGNORECASE):
+        # Status (Git / Project status)
+        if re.search(r"\b(?:(?:show|check|what(?:\s+is|\s*'?s)?)(?:\s+me)?\s+(?:my\s+)?(?:current\s+)?(?:project|git)\s+status|git\s+status|check\s+git|project\s+status)\b", clean_text, re.IGNORECASE):
             decision = RouteDecision(
                 intent="tool",
                 tool_name="git_status",
                 tool_arguments={"project_name": p_name},
-                reason="Matched Git status request",
+                reason="Matched Git / Project status request",
             )
             logger.info(f"Router decision: tool='git_status' for message='{raw_text[:40]}...'")
             return decision
@@ -767,7 +846,10 @@ class IntentRouter:
         m = re.search(r"\b(?:in|for|of|to|project)\s+(?:my\s+|the\s+)?['\"]?([a-zA-Z0-9_\-]+)['\"]?\b", text, re.IGNORECASE)
         if m:
             candidate = m.group(1).strip()
-            if candidate.lower() not in ("git", "github", "the", "my", "this", "these", "project", "an", "a"):
+            if candidate.lower() not in (
+                "git", "github", "the", "my", "this", "these", "project", "an", "a",
+                "status", "current", "repo", "repository", "files", "workspace", "app"
+            ):
                 return candidate
         return ""
 

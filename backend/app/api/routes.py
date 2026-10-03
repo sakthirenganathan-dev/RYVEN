@@ -475,3 +475,715 @@ async def confirm_browser_action(payload: Dict[str, Any]) -> Dict[str, Any]:
         )
     return {"success": True, "message": f"Action '{action}' confirmed."}
 
+
+# --------------------------------------------------------------------------
+# RYVEN 3.0 AGENT CONTROL PLANE ENDPOINTS
+# --------------------------------------------------------------------------
+
+
+def get_agent_engine(request: Request):
+    """Return the agent engine owned by the running assistant instance."""
+    return get_assistant(request).agent_engine
+
+
+@router.get("/agent/tasks")
+async def list_agent_tasks(request: Request) -> List[Dict[str, Any]]:
+    """List tracked multi-step agent tasks."""
+    return get_agent_engine(request).list_tasks()
+
+
+@router.get("/agent/state")
+async def get_agent_state(request: Request, task_id: Optional[str] = None) -> Dict[str, Any]:
+    """Retrieve full execution state for an agent task."""
+    agent_engine = get_agent_engine(request)
+    if task_id:
+        st = agent_engine.get_task_state(task_id)
+        if st:
+            return st.model_dump()
+    tasks = agent_engine.list_tasks()
+    if tasks:
+        latest = agent_engine.get_task_state(tasks[-1]["task_id"])
+        if latest:
+            return latest.model_dump()
+    return {
+        "status": "IDLE",
+        "user_goal": "",
+        "current_plan": None,
+        "current_step_index": 0,
+    }
+
+
+@router.post("/agent/confirm")
+async def confirm_agent_step(request: Request, payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Approve a confirmation-gated agent step."""
+    token = payload.get("token", "")
+    return await get_agent_engine(request).confirm_action(token)
+
+
+@router.post("/agent/cancel")
+async def cancel_agent_task(request: Request, payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Cancel a running agent task."""
+    task_id = payload.get("task_id", "")
+    ok = get_agent_engine(request).cancel_task(task_id)
+    return {"success": ok, "task_id": task_id}
+
+
+# --------------------------------------------------------------------------
+# RYVEN 3.0 UNIFIED INTERNET AGENT ENDPOINTS
+# --------------------------------------------------------------------------
+
+
+@router.get("/internet/state")
+async def get_internet_state() -> Dict[str, Any]:
+    """Retrieve observable live state of the Unified Internet Agent."""
+    from app.internet.agent import internet_agent
+    st = internet_agent.get_state()
+    return st.model_dump()
+
+
+@router.post("/internet/search")
+async def internet_search_endpoint(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Perform live web search and rank authoritative results."""
+    from app.internet.agent import internet_agent
+    query = payload.get("query", "")
+    max_results = int(payload.get("max_results", 5))
+    return await internet_agent.search(query=query, max_results=max_results)
+
+
+@router.post("/internet/research")
+async def internet_research_endpoint(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Execute deep multi-source research on a technical topic with citations."""
+    from app.internet.agent import internet_agent
+    topic = payload.get("topic", "")
+    max_sources = int(payload.get("max_sources", 3))
+    return await internet_agent.research(topic=topic, max_sources=max_sources)
+
+
+@router.post("/internet/task")
+async def internet_task_endpoint(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Execute an end-to-end multi-step web task."""
+    from app.internet.agent import internet_agent
+    goal = payload.get("goal", "")
+    auto_confirm = bool(payload.get("auto_confirm", False))
+    return await internet_agent.execute_task(goal=goal, auto_confirm=auto_confirm)
+
+
+@router.post("/internet/auth-resume")
+async def internet_auth_resume_endpoint(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Resume paused internet task after user completed browser authentication."""
+    from app.internet.agent import internet_agent
+    token = payload.get("token", "") or payload.get("resume_token", "")
+    return await internet_agent.resume_authentication(resume_token=token)
+
+
+# --------------------------------------------------------------------------
+# RYVEN 3.0 M15.1 MULTI-MODEL PROVIDER & ROUTING DECISION ENDPOINTS
+# --------------------------------------------------------------------------
+
+
+@router.get("/v1/models/hardware")
+@router.get("/models/hardware")
+async def get_models_hardware_endpoint() -> Dict[str, Any]:
+    """Retrieve safe read-only hardware telemetry and local model execution tier."""
+    from app.ai.hardware import HardwareDiagnostics
+    profile = await HardwareDiagnostics.get_profile()
+    return profile.model_dump()
+
+
+@router.get("/v1/models/catalog")
+@router.get("/models/catalog")
+async def get_models_catalog_endpoint() -> Dict[str, Any]:
+    """Retrieve catalog of supported local and remote models."""
+    from app.ai.hf_manager import hf_model_manager
+    from app.ai.registry import model_registry
+    registered = model_registry.list_models()
+    hf_candidates = hf_model_manager.get_catalog()
+    return {
+        "registered_models": [m.model_dump() for m in registered],
+        "hf_catalog": [c.model_dump() for c in hf_candidates],
+    }
+
+
+@router.get("/v1/models/providers")
+@router.get("/models/providers")
+async def get_models_providers_endpoint() -> Dict[str, Any]:
+    """Aggregate health and availability for all configured providers without exposing secrets."""
+    from app.ai.unified import unified_ai_provider
+    return await unified_ai_provider.check_health()
+
+
+@router.get("/v1/models/route")
+@router.get("/models/route")
+async def get_models_route_endpoint(
+    task_type: str = "GENERAL_REASONING",
+    prompt: str = "",
+    allow_remote: bool = False,
+    preferred_model_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Deterministically explain and resolve model routing for a specific task."""
+    from app.ai.models import TaskType
+    from app.ai.router import model_router
+
+    try:
+        t_type = TaskType(task_type.upper())
+    except ValueError:
+        t_type = TaskType.GENERAL_REASONING
+
+    decision = await model_router.route(
+        task_type=t_type,
+        prompt=prompt,
+        allow_remote=allow_remote,
+        preferred_model_id=preferred_model_id,
+    )
+    return {
+        "task_type": decision.task_type.value,
+        "selected_provider": decision.provider,
+        "selected_model": decision.selected_model,
+        "local": decision.local_or_remote == "local",
+        "remote_allowed": decision.remote_allowed,
+        "reason": decision.reason,
+        "fallback": decision.fallback,
+        "memory_estimate_gb": decision.memory_estimate_gb,
+    }
+
+
+# --------------------------------------------------------------------------
+# M15.2 VISION & OCR API ENDPOINTS
+# --------------------------------------------------------------------------
+
+
+@router.post("/browser/screenshot")
+@router.post("/v1/browser/screenshot")
+async def capture_browser_screenshot_endpoint(payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Capture in-memory visual screenshot of the active browser page."""
+    from app.browser.engine import browser_engine
+
+    data = payload or {}
+    session_id = data.get("session_id")
+    max_width = int(data.get("max_width", 800))
+    max_height = int(data.get("max_height", 600))
+    max_width = min(max(max_width, 100), 1920)
+    max_height = min(max(max_height, 100), 1080)
+
+    return await browser_engine.capture_screenshot(
+        session_id=session_id,
+        max_width=max_width,
+        max_height=max_height,
+    )
+
+
+@router.post("/vision/analyze")
+@router.post("/v1/vision/analyze")
+async def analyze_vision_endpoint(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Analyze an image or active page snapshot using local vision models."""
+    from app.ai.vision import perception_agent
+    from app.browser.engine import browser_engine
+    from fastapi import HTTPException
+
+    if payload.get("allow_remote") is True:
+        raise HTTPException(
+            status_code=400,
+            detail="Remote vision inference is strictly disabled in RYVEN. All vision processing must remain local.",
+        )
+
+    image_b64 = payload.get("image_b64")
+    url = payload.get("url")
+    session_id = payload.get("session_id")
+
+    if not image_b64:
+        capture_res = await browser_engine.capture_screenshot(session_id=session_id)
+        if not capture_res.get("success"):
+            return {
+                "success": False,
+                "error": f"No image provided and screenshot capture failed: {capture_res.get('error')}",
+            }
+        image_b64 = capture_res.get("screenshot_b64")
+        url = capture_res.get("url")
+
+    if image_b64 and len(image_b64) > 10 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Image payload exceeds 10MB limit.")
+
+    prompt = payload.get("prompt", "Analyze this webpage layout, interactive elements, and content.")
+    result = await perception_agent.perceive(
+        image_b64=image_b64,
+        prompt=prompt,
+        url=url,
+        allow_remote=False,
+    )
+    return result.model_dump()
+
+
+@router.post("/vision/ocr")
+@router.post("/v1/vision/ocr")
+async def extract_ocr_endpoint(payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Extract visible text from image or active browser page using local OCR."""
+    import base64
+    import io
+    from app.actions.event_bus import action_bus
+    from app.actions.models import ActionEvent, ActionStatus, ActionType
+    from app.ai.vision import perception_agent
+    from app.browser.engine import browser_engine
+    from app.browser.security import BrowserSecurityValidator
+    from fastapi import HTTPException
+
+    data = payload or {}
+    image_b64 = data.get("image_b64")
+    session_id = data.get("session_id")
+    url = data.get("url", "")
+
+    if not image_b64:
+        capture_res = await browser_engine.capture_screenshot(session_id=session_id)
+        if not capture_res.get("success"):
+            return {
+                "success": False,
+                "error": f"No image provided and screenshot capture failed: {capture_res.get('error')}",
+            }
+        image_b64 = capture_res.get("screenshot_b64")
+        url = capture_res.get("url", "")
+
+    if not image_b64:
+        return {"success": False, "error": "No image available for OCR."}
+
+    if len(image_b64) > 10 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Image payload exceeds 10MB limit.")
+
+    await action_bus.publish(
+        ActionEvent(
+            action_type=ActionType.OCR_STARTED,
+            status=ActionStatus.STARTED,
+            title="Running OCR extraction",
+            safe_metadata={"url": url, "has_image": True},
+        )
+    )
+
+    ocr_text = ""
+    engine_used = "none"
+    text_regions = []
+
+    # 1. pytesseract
+    try:
+        import pytesseract  # type: ignore
+        from PIL import Image  # type: ignore
+
+        img_bytes = base64.b64decode(image_b64)
+        img = Image.open(io.BytesIO(img_bytes))
+        raw_text = pytesseract.image_to_string(img)
+        if raw_text and raw_text.strip():
+            ocr_text = raw_text.strip()
+            engine_used = "tesseract"
+    except Exception:
+        pass
+
+    # 2. Local vision fallback
+    if not ocr_text:
+        try:
+            result = await perception_agent.perceive(
+                image_b64=image_b64,
+                prompt="Extract all visible text and labels from this image.",
+                url=url,
+                allow_remote=False,
+            )
+            if result.ocr_text:
+                ocr_text = result.ocr_text
+                engine_used = "perception_agent"
+            elif result.description:
+                ocr_text = result.description
+                engine_used = "perception_agent_desc"
+            text_regions = [
+                {"label": el.label, "text": el.text, "bbox": el.bbox, "confidence": el.confidence}
+                for el in result.elements
+                if el.text
+            ]
+        except Exception:
+            pass
+
+    sanitized = BrowserSecurityValidator.redact_credentials(ocr_text or "")
+    if not sanitized:
+        await action_bus.publish(
+            ActionEvent(
+                action_type=ActionType.OCR_FAILED,
+                status=ActionStatus.FAILED,
+                title="OCR failed to extract text",
+                safe_metadata={"url": url, "error": "No text extracted"},
+            )
+        )
+        return {"success": False, "error": "No text extracted from image."}
+
+    await action_bus.publish(
+        ActionEvent(
+            action_type=ActionType.OCR_COMPLETED,
+            status=ActionStatus.COMPLETED,
+            title="OCR text extraction completed",
+            safe_metadata={"url": url, "engine": engine_used, "text_length": len(sanitized)},
+        )
+    )
+
+    return {
+        "success": True,
+        "engine": engine_used,
+        "ocr_text": sanitized,
+        "text_regions": text_regions,
+        "length": len(sanitized),
+    }
+
+
+@router.get("/vision/status")
+@router.get("/v1/vision/status")
+async def get_vision_status_endpoint() -> Dict[str, Any]:
+    """Retrieve availability and configuration status for Vision & OCR subsystem."""
+    from app.ai.registry import model_registry
+    from app.ai.models import TaskType
+
+    pytesseract_available = False
+    try:
+        import pytesseract  # type: ignore
+        pytesseract_available = True
+    except ImportError:
+        pass
+
+    pil_available = False
+    try:
+        import PIL  # type: ignore
+        pil_available = True
+    except ImportError:
+        pass
+
+    cv2_available = False
+    try:
+        import cv2  # type: ignore
+        cv2_available = True
+    except ImportError:
+        pass
+
+    vision_models = model_registry.list_for_task(TaskType.VISION)
+    installed_vision = [m.id for m in vision_models if m.installed]
+    all_vision = [m.id for m in vision_models]
+
+    return {
+        "status": "ready" if (installed_vision or pytesseract_available) else "available",
+        "local_only": True,
+        "remote_vision_allowed": False,
+        "default_model": "moondream",
+        "vision_models": all_vision,
+        "installed_vision_models": installed_vision,
+        "ocr_engine": "tesseract" if pytesseract_available else "vision_model",
+        "pytesseract_available": pytesseract_available,
+        "pil_available": pil_available,
+        "cv2_available": cv2_available,
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# M15.3 Phase 4 — Browser File Management Endpoints
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@router.post("/browser/download")
+@router.post("/v1/browser/download")
+async def browser_download_endpoint(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Download a file from a URL to an approved local directory."""
+    from app.internet.agent import internet_agent
+
+    url = payload.get("url", "")
+    destination_folder = payload.get("destination_folder", "downloads")
+    custom_filename = payload.get("custom_filename")
+    confirmed = bool(payload.get("confirmed", False))
+    session_id = payload.get("session_id")
+
+    return await internet_agent.download_file(
+        url=url,
+        destination_folder=destination_folder,
+        custom_filename=custom_filename,
+        confirmed=confirmed,
+        session_id=session_id,
+    )
+
+
+@router.post("/browser/upload")
+@router.post("/v1/browser/upload")
+async def browser_upload_endpoint(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Attach an approved local file to a web form file input element."""
+    from app.internet.agent import internet_agent
+
+    source_path = payload.get("source_path", "")
+    target_field = payload.get("target_field", "")
+    form_id = payload.get("form_id")
+    confirmed = bool(payload.get("confirmed", False))
+    session_id = payload.get("session_id")
+
+    return await internet_agent.upload_file(
+        source_path=source_path,
+        target_field=target_field,
+        form_id=form_id,
+        confirmed=confirmed,
+        session_id=session_id,
+    )
+
+
+@router.post("/browser/download/verify")
+@router.post("/v1/browser/download/verify")
+async def browser_download_verify_endpoint(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Verify that a downloaded file exists and is within approved directories."""
+    from app.internet.agent import internet_agent
+
+    file_path = payload.get("file_path", "")
+    expected_size = payload.get("expected_size")
+
+    return internet_agent.verify_download(
+        file_path=file_path,
+        expected_size=expected_size,
+    )
+
+
+@router.post("/browser/upload/verify")
+@router.post("/v1/browser/upload/verify")
+async def browser_upload_verify_endpoint(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Verify that a local file was attached to the target web field."""
+    from app.internet.agent import internet_agent
+
+    field_name = payload.get("field_name", "")
+    filename = payload.get("filename", "")
+
+    return internet_agent.verify_upload(
+        field_name=field_name,
+        filename=filename,
+    )
+
+
+# ===========================================================================
+# Runtime & Reliability Endpoints (M15.3.9)
+# ===========================================================================
+
+@router.get("/runtime/status")
+@router.get("/v1/runtime/status")
+async def runtime_status_endpoint() -> Dict[str, Any]:
+    """Return overall runtime status, host pressure, and performance overview."""
+    from app.runtime.resource_manager import resource_manager
+    from app.runtime.performance import runtime_performance_service
+    from app.runtime.checkpoint_store import checkpoint_store
+    from app.runtime.models import RuntimeState
+
+    res_snapshot = resource_manager.get_resource_snapshot()
+    perf = await runtime_performance_service.get_aggregate_metrics()
+    incomplete = checkpoint_store.list_incomplete_tasks()
+
+    state = RuntimeState.NORMAL.value
+    if res_snapshot.get("status") == "CRITICAL":
+        state = RuntimeState.RESOURCE_CRITICAL.value
+    elif res_snapshot.get("status") == "WARNING":
+        state = RuntimeState.RESOURCE_WARNING.value
+    elif len(incomplete) > 0:
+        state = RuntimeState.RECOVERING.value
+
+    return {
+        "runtime_state": state,
+        "host_resources": res_snapshot,
+        "performance": perf.model_dump(),
+        "active_or_incomplete_tasks_count": len(incomplete),
+        "status": "ok",
+    }
+
+
+@router.get("/runtime/resources")
+@router.get("/v1/runtime/resources")
+async def runtime_resources_endpoint() -> Dict[str, Any]:
+    """Return host hardware resource utilization and pressure thresholds."""
+    from app.runtime.resource_manager import resource_manager
+
+    return resource_manager.get_resource_snapshot(force_refresh=True)
+
+
+@router.get("/runtime/performance")
+@router.get("/v1/runtime/performance")
+async def runtime_performance_endpoint() -> Dict[str, Any]:
+    """Return aggregate latency distributions and recent operation metrics."""
+    from app.runtime.performance import runtime_performance_service
+
+    agg = await runtime_performance_service.get_aggregate_metrics()
+    recent = await runtime_performance_service.get_metrics(limit=25)
+
+    return {
+        "aggregate": agg.model_dump(),
+        "recent_operations": [m.model_dump() for m in recent],
+    }
+
+
+@router.get("/runtime/tasks")
+@router.get("/v1/runtime/tasks")
+async def runtime_tasks_endpoint() -> Dict[str, Any]:
+    """Return all persisted task checkpoints and current execution states."""
+    from app.runtime.checkpoint_store import checkpoint_store
+
+    checkpoints = checkpoint_store.list_checkpoints(limit=50)
+    return {
+        "total_persisted": len(checkpoints),
+        "tasks": [c.model_dump() for c in checkpoints],
+    }
+
+
+@router.get("/runtime/recovery")
+@router.get("/v1/runtime/recovery")
+async def runtime_recovery_endpoint() -> Dict[str, Any]:
+    """Scan and return recovery status for interrupted tasks."""
+    from app.runtime.recovery import runtime_recovery_service
+
+    decisions = runtime_recovery_service.scan_for_recoverable_tasks()
+    return {
+        "recoverable_count": len(decisions),
+        "tasks": [d.model_dump() for d in decisions],
+    }
+
+
+@router.post("/runtime/recovery/resume")
+@router.post("/v1/runtime/recovery/resume")
+async def runtime_recovery_resume_endpoint(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Resume an interrupted task following crash/restart, requiring confirmation if consequential."""
+    from app.runtime.recovery import runtime_recovery_service
+
+    task_id = payload.get("task_id", "")
+    confirmed = bool(payload.get("confirmed", False))
+
+    decision = runtime_recovery_service.resume_task(task_id, confirmed=confirmed)
+    return decision.model_dump()
+
+
+# ---------------------------------------------------------------------------
+# M16.0 Multi-Agent Coordination Endpoints
+# ---------------------------------------------------------------------------
+
+@router.post("/agents/task")
+@router.post("/v1/agents/task")
+async def create_agent_task_endpoint(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Submit a high-level goal to the central Agent Coordinator."""
+    from app.agents import agent_coordinator
+
+    goal = payload.get("goal", "")
+    if not goal:
+        return {"error": "Missing 'goal' parameter in request."}
+    project_name = payload.get("project_name")
+    auto_confirm = bool(payload.get("auto_confirm", False))
+
+    graph = await agent_coordinator.coordinate(
+        goal=goal,
+        project_name=project_name,
+        auto_confirm=auto_confirm,
+    )
+    return graph.to_dict()
+
+
+@router.get("/agents")
+@router.get("/v1/agents")
+async def list_agents_endpoint() -> Dict[str, Any]:
+    """Return all registered specialized agent roles and their capabilities."""
+    from app.agents import agent_registry
+
+    agents = agent_registry.list_agents()
+    return {
+        "total_agents": len(agents),
+        "agents": [a.model_dump() for a in agents],
+    }
+
+
+@router.get("/agents/{agent_id}")
+@router.get("/v1/agents/{agent_id}")
+async def get_agent_endpoint(agent_id: str) -> Dict[str, Any]:
+    """Return descriptor for a specific registered agent role."""
+    from app.agents import agent_registry
+
+    agent = agent_registry.get_agent_by_id(agent_id)
+    if not agent:
+        for a in agent_registry.list_agents():
+            if a.role.value.lower() == agent_id.lower():
+                return a.model_dump()
+        return {"error": f"Agent '{agent_id}' not found."}
+    return agent.model_dump()
+
+
+@router.get("/agents/graph/{graph_id}")
+@router.get("/v1/agents/graph/{graph_id}")
+async def get_agent_graph_endpoint(graph_id: str) -> Dict[str, Any]:
+    """Return full DAG state and progress for an active or completed task graph."""
+    from app.agents import agent_coordinator
+
+    graph = agent_coordinator.get_graph(graph_id)
+    if not graph:
+        return {"error": f"Graph '{graph_id}' not found."}
+    return graph.to_dict()
+
+
+@router.get("/agents/tasks/{task_id}")
+@router.get("/v1/agents/tasks/{task_id}")
+async def get_agent_task_endpoint(task_id: str) -> Dict[str, Any]:
+    """Retrieve detailed state of a specific agent task."""
+    from app.agents import agent_coordinator
+
+    for graph in agent_coordinator._active_graphs.values():
+        task = graph.get_task(task_id)
+        if task:
+            return task.model_dump()
+    return {"error": f"Task '{task_id}' not found."}
+
+
+@router.post("/agents/tasks/{task_id}/cancel")
+@router.post("/v1/agents/tasks/{task_id}/cancel")
+async def cancel_agent_task_endpoint(task_id: str, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Cancel execution of a task graph containing the specified task ID."""
+    from app.agents import agent_coordinator
+
+    reason = (payload or {}).get("reason", "User requested cancellation")
+    target_graph_id = None
+    if task_id in agent_coordinator._active_graphs:
+        target_graph_id = task_id
+    else:
+        for g_id, g in agent_coordinator._active_graphs.items():
+            if g.get_task(task_id):
+                target_graph_id = g_id
+                break
+
+    if not target_graph_id:
+        return {"error": f"Active graph for task '{task_id}' not found."}
+
+    cancelled = await agent_coordinator.cancel_graph(target_graph_id, reason=reason)
+    return cancelled.to_dict() if cancelled else {"error": "Failed to cancel graph."}
+
+
+@router.post("/agents/tasks/{task_id}/confirm")
+@router.post("/v1/agents/tasks/{task_id}/confirm")
+async def confirm_agent_task_endpoint(task_id: str, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Explicitly confirm a gated action and resume graph execution."""
+    from app.agents import agent_coordinator
+
+    graph_id = (payload or {}).get("graph_id")
+    if not graph_id:
+        for g_id, g in agent_coordinator._active_graphs.items():
+            if g.get_task(task_id):
+                graph_id = g_id
+                break
+
+    if not graph_id:
+        return {"error": f"Active graph for task '{task_id}' not found."}
+
+    resumed = await agent_coordinator.confirm_task(graph_id, task_id)
+    return resumed.to_dict() if resumed else {"error": "Failed to resume graph."}
+
+
+@router.get("/agents/events")
+@router.get("/v1/agents/events")
+async def get_agent_events_endpoint(limit: int = 50) -> Dict[str, Any]:
+    """Return recent agent coordination events from the ActionEventBus."""
+    from app.actions.event_bus import action_bus
+
+    all_events = action_bus.get_recent_events(limit=limit * 2)
+    agent_events = [e for e in all_events if e.action_type.value.startswith("AGENT_")][:limit]
+    return {
+        "total_events": len(agent_events),
+        "events": [e.model_dump() for e in agent_events],
+    }
+
+
+
+
+
+
+
+

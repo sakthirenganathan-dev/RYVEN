@@ -150,7 +150,7 @@ class BrowserSecurityValidator:
             return [cls.redact_credentials(item) for item in data]
         elif isinstance(data, str):
             # Check for token or secret assignment patterns
-            if re.search(r"(?:bearer\s+[a-z0-9_\-\.]{20,}|ghp_[a-z0-9]{30,}|sk-[a-z0-9]{30,})", data, re.IGNORECASE):
+            if re.search(r"(?:bearer\s+[a-z0-9_\-\.]{20,}|ghp_[a-z0-9]{20,}|sk-[a-z0-9_\-]{20,}|password\s*=\s*[^\s]+)", data, re.IGNORECASE):
                 return "[REDACTED_TOKEN]"
             return data
         return data

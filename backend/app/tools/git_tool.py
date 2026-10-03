@@ -54,6 +54,17 @@ class GitStatusTool(BaseTool):
     async def execute(self, **kwargs: Any) -> Dict[str, Any]:
         project_name = kwargs.get("project_name") or kwargs.get("project_name_hint") or ""
         if not project_name:
+            import os
+            from app.tools.project_tool import get_projects_root
+            root = get_projects_root()
+            if os.path.exists(root):
+                entries = [d for d in os.listdir(root) if os.path.isdir(os.path.join(root, d))]
+                git_entries = [d for d in entries if os.path.exists(os.path.join(root, d, ".git"))]
+                if git_entries:
+                    project_name = sorted(git_entries)[-1]
+                elif entries:
+                    project_name = sorted(entries)[-1]
+        if not project_name:
             return {"success": False, "tool": self.name, "message": "project_name is required."}
 
         success, status, err = await self._engine.get_structured_status(project_name)

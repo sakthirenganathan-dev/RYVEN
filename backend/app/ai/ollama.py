@@ -32,6 +32,8 @@ class OllamaProvider(AIProvider):
     async def check_health(self) -> Dict[str, Any]:
         """Verify if Ollama service is online and the configured model is installed."""
         health_data: Dict[str, Any] = {
+            "provider": self.provider_name,
+            "local": True,
             "online": False,
             "version": None,
             "model_available": False,
@@ -67,9 +69,19 @@ class OllamaProvider(AIProvider):
         prompt: str,
         system_prompt: Optional[str] = None,
         messages: Optional[List[ChatMessage]] = None,
+        images: Optional[List[str]] = None,
         **kwargs: Any,
     ) -> AIResponse:
-        """Send chat messages to Ollama /api/chat and return normalized AIResponse."""
+        """Send chat messages to Ollama /api/chat and return normalized AIResponse.
+
+        Args:
+            prompt: The user text prompt.
+            system_prompt: Optional system context.
+            messages: Optional prior conversation messages.
+            images: Optional list of base64-encoded image strings for multimodal vision
+                    requests. Content is never logged. Existing text-only callers are
+                    completely unaffected when this is None (default).
+        """
         if not self.model:
             raise OllamaUnavailableError(
                 "No Ollama model configured. Please set OLLAMA_MODEL in your environment."
@@ -91,8 +103,21 @@ class OllamaProvider(AIProvider):
                 payload_messages.append({"role": msg.role, "content": msg.content})
 
         # 3. Ensure the current prompt is appended as the latest user message
-        if not payload_messages or payload_messages[-1].get("role") != "user" or payload_messages[-1].get("content") != prompt:
-            payload_messages.append({"role": "user", "content": prompt})
+        #    For vision requests, attach images to the user message (never logged).
+        last_matches = (
+            payload_messages
+            and payload_messages[-1].get("role") == "user"
+            and payload_messages[-1].get("content") == prompt
+        )
+        if not last_matches:
+            user_message: Dict[str, Any] = {"role": "user", "content": prompt}
+            if images:
+                # Images are base64 strings; passed directly, never written to logs
+                user_message["images"] = images
+            payload_messages.append(user_message)
+        elif images and payload_messages:
+            # Attach images to the existing final user message
+            payload_messages[-1]["images"] = images  # type: ignore[index]
 
         url = f"{self.base_url}/api/chat"
         payload: Dict[str, Any] = {

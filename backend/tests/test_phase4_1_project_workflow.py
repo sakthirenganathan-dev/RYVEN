@@ -201,7 +201,21 @@ async def test_workflow_engine_confirmation_pause_and_resume():
     assert "requires user confirmation" in result_paused.message.lower()
 
     # 2. Resume confirmed workflow -> Completes remaining steps
-    result_resumed = await engine.resume_workflow(result_paused.workflow_id)
+    paused_workflow = engine.get_workflow(result_paused.workflow_id)
+    assert paused_workflow is not None
+    pending_step = paused_workflow.steps[paused_workflow.current_step_index]
+    result_resumed = await engine.resume_workflow(
+        result_paused.workflow_id,
+        confirmed_step_id=pending_step.step_id,
+    )
+    while result_resumed and result_resumed.status == WorkflowState.WAITING_FOR_CONFIRMATION:
+        paused_workflow = engine.get_workflow(result_paused.workflow_id)
+        assert paused_workflow is not None
+        pending_step = paused_workflow.steps[paused_workflow.current_step_index]
+        result_resumed = await engine.resume_workflow(
+            result_paused.workflow_id,
+            confirmed_step_id=pending_step.step_id,
+        )
     assert result_resumed is not None
     assert result_resumed.status == WorkflowState.COMPLETED
     assert result_resumed.steps_completed == len(result_resumed.step_details)
