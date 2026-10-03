@@ -58,18 +58,22 @@ class Assistant:
         # 6. Safety & Permission Guard
         self.safety_guard = safety or safety_guard
 
-        # 7. One agent control plane sharing this assistant's registry and guard
-        if agent_engine is None:
-            from app.agent.engine import AgentEngine
-            self.agent_engine = AgentEngine(registry=self.registry, guard=self.safety_guard)
-        else:
-            self.agent_engine = agent_engine
-
-        # 8. Workflow Engine (Phase 4)
+        # 7. Workflow Engine (Phase 4)
         self.workflow_engine = workflow_engine or WorkflowEngine(
             registry=self.registry,
             guard=self.safety_guard,
         )
+
+        # 8. One agent control plane sharing this assistant's registry, guard, and workflow planner
+        if agent_engine is None:
+            from app.agent.engine import AgentEngine
+            self.agent_engine = AgentEngine(
+                registry=self.registry,
+                guard=self.safety_guard,
+                workflow_engine=self.workflow_engine,
+            )
+        else:
+            self.agent_engine = agent_engine
 
         logger.info(
             f"Assistant online. AI Provider: {self.ai_provider.provider_name} | "
