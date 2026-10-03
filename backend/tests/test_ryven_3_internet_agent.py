@@ -137,7 +137,7 @@ def test_page_reader_secret_redaction():
     dirty_text = "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9 and stripe_dummy_test_placeholder"
     sanitized = InternetSecurityPolicy.redact_secrets(dirty_text)
     assert "eyJhbGciOi" not in sanitized
-    assert "sk_live_" not in sanitized
+    assert "sk_live_" not in sanitized and "stripe_live_key_example" not in sanitized
     assert "[REDACTED_TOKEN]" in sanitized or "[REDACTED_SECRET]" in sanitized
 
 

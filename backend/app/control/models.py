@@ -172,6 +172,61 @@ class DesktopUIElement(BaseModel):
                 raise ValueError(f"UI element text cannot expose credentials: {forbidden}")
         return v
 
+    @property
+    def center_x(self) -> int:
+        return int(self.bounds.get("left", 0) + self.bounds.get("width", 0) // 2)
+
+    @property
+    def center_y(self) -> int:
+        return int(self.bounds.get("top", 0) + self.bounds.get("height", 0) // 2)
+
+
+class DesktopTargetResolutionResult(BaseModel):
+    """Structured result of resolving a semantic desktop UI target."""
+    success: bool
+    target: str
+    element: Optional[DesktopUIElement] = None
+    confidence: float = Field(0.0, ge=0.0, le=1.0)
+    failure_class: Optional[FailureClass] = None
+    error: Optional[str] = None
+    details: Dict[str, Any] = Field(default_factory=dict)
+
+    @property
+    def center_x(self) -> Optional[int]:
+        return self.element.center_x if self.element else None
+
+    @property
+    def center_y(self) -> Optional[int]:
+        return self.element.center_y if self.element else None
+
+    @property
+    def element_id(self) -> Optional[str]:
+        return self.element.element_id if self.element else None
+
+    @property
+    def role(self) -> Optional[str]:
+        return self.element.role if self.element else None
+
+    @property
+    def text(self) -> Optional[str]:
+        return self.element.text if self.element else None
+
+    @property
+    def bounds(self) -> Optional[Dict[str, int]]:
+        return self.element.bounds if self.element else None
+
+    @property
+    def source(self) -> Optional[DesktopTargetSource]:
+        return self.element.source if self.element else None
+
+    @property
+    def actionable(self) -> bool:
+        return self.element.actionable if self.element else False
+
+
+# Alias for compatibility
+TargetResolutionResult = DesktopTargetResolutionResult
+
 
 class DesktopActionRequest(BaseModel):
     """Controlled desktop interaction request."""
@@ -250,6 +305,17 @@ class ObservationRecord(BaseModel):
     project_name: Optional[str] = None
     success: bool = True
     error: Optional[str] = None
+
+
+class DesktopObservationResult(BaseModel):
+    """Structured result of native desktop observation."""
+    active_application: Optional[str] = None
+    active_window: Optional[DesktopWindowState] = None
+    windows: List[DesktopWindowState] = Field(default_factory=list)
+    observed_at: str = Field(default_factory=_utc_now_iso)
+    observation_success: bool = True
+    error: Optional[str] = None
+    details: Dict[str, Any] = Field(default_factory=dict)
 
 
 class DiscoveredScopeItem(BaseModel):

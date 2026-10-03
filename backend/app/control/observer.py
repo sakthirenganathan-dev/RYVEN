@@ -15,13 +15,15 @@ Security Invariants:
 from __future__ import annotations
 
 import os
+import time
 from typing import Any, Dict, List, Optional
 
 from app.actions.event_bus import action_bus
 from app.actions.models import ActionEvent, ActionStatus, ActionType
 from app.browser.engine import browser_engine
-from app.control.models import ObservationRecord
+from app.control.models import ObservationRecord, DesktopObservationResult, DesktopWindowState
 from app.core.logging_config import logger
+from app.desktop.interaction import desktop_driver as default_desktop_driver, WindowsDesktopDriver
 from app.tools.app_tool import OpenApplicationTool
 from app.tools.process_tool import _get_running_approved_processes
 from app.tools.registry import ToolRegistry, create_default_registry
@@ -30,9 +32,14 @@ from app.tools.registry import ToolRegistry, create_default_registry
 class ObserverEngine:
     """Multi-domain observer capturing live computer and internet state."""
 
-    def __init__(self, tool_registry: Optional[ToolRegistry] = None) -> None:
+    def __init__(
+        self,
+        tool_registry: Optional[ToolRegistry] = None,
+        desktop_driver: Optional[WindowsDesktopDriver] = None,
+    ) -> None:
         self.tool_reg = tool_registry or create_default_registry()
         self.browser = browser_engine
+        self.desktop_driver = desktop_driver or default_desktop_driver
 
     async def observe_environment(
         self,
@@ -44,12 +51,37 @@ class ObserverEngine:
         """Aggregate cross-domain observations prior to or following action execution."""
         records: List[ObservationRecord] = []
 
-        # 1. Desktop & Applications Observation
+        # 1. Desktop Applications Process Observation
         try:
             app_obs = await self.observe_applications(target_app=target_app)
             records.append(app_obs)
         except Exception as exc:
-            logger.debug(f"[OBSERVER] Desktop observation error: {exc}")
+            logger.debug(f"[OBSERVER] Desktop applications observation error: {exc}")
+
+        # 1.5 Desktop Window State Observation (M17.1)
+        try:
+            desktop_obs = await self.observe_desktop(target_app=target_app, task_id=task_id)
+            if desktop_obs.active_window:
+                records.append(
+                    ObservationRecord(
+                        source="desktop_window",
+                        title=f"Active Window: {desktop_obs.active_window.title[:40]}",
+                        summary=f"App: {desktop_obs.active_application} (HWND {desktop_obs.active_window.hwnd})",
+                        app_name=desktop_obs.active_application,
+                        details={
+                            "hwnd": desktop_obs.active_window.hwnd,
+                            "bounds": {
+                                "left": desktop_obs.active_window.left,
+                                "top": desktop_obs.active_window.top,
+                                "width": desktop_obs.active_window.width,
+                                "height": desktop_obs.active_window.height,
+                            },
+                            "windows_count": len(desktop_obs.windows),
+                        },
+                    )
+                )
+        except Exception as exc:
+            logger.debug(f"[OBSERVER] Desktop window observation error: {exc}")
 
         # 2. Browser State Observation
         try:
@@ -109,6 +141,127 @@ class ObserverEngine:
             },
             app_name=target_app,
         )
+
+    async def observe_desktop(
+        self,
+        target_app: Optional[str] = None,
+        task_id: Optional[str] = None,
+    ) -> DesktopObservationResult:
+        """Inspect running allowlisted Windows applications and their active window state.
+
+        Strict invariants:
+        - Reuses WindowsDesktopDriver; no direct Win32 or ctypes calls here.
+        - Discovers only allowlisted windows.
+        - If foreground window is not allowlisted, active_application remains None.
+        - Never includes passwords, tokens, cookies, or secrets in telemetry.
+        """
+        t0 = time.monotonic()
+        await action_bus.publish(
+            ActionEvent(
+                action_type=ActionType.DESKTOP_OBSERVATION_STARTED,
+                status=ActionStatus.STARTED,
+                title=f"Desktop observation started{f' for {target_app}' if target_app else ''}",
+                task_id=task_id,
+                safe_metadata={"target_app": target_app},
+            )
+        )
+
+        try:
+            raw_windows = self.desktop_driver.inspect_windows()
+            active_window: Optional[DesktopWindowState] = None
+
+            # Identify focused window among allowlisted windows
+            for w in raw_windows:
+                if w.focused:
+                    active_window = w
+                    break
+
+            active_app = active_window.application if active_window else None
+
+            # If target_app filter requested, match case-insensitively with alias support
+            if target_app:
+                target_lower = target_app.strip().lower()
+                alias_map = {
+                    "vscode": "visual studio code",
+                    "code": "visual studio code",
+                    "chrome": "google chrome",
+                    "terminal": "windows terminal",
+                    "wt": "windows terminal",
+                    "calc": "calculator",
+                    "calculator": "calculator",
+                    "notepad": "notepad",
+                    "explorer": "file explorer",
+                }
+                resolved_target = alias_map.get(target_lower, target_lower)
+                filtered_windows = [
+                    w for w in raw_windows
+                    if resolved_target in w.application.lower()
+                    or target_lower in w.application.lower()
+                    or target_lower in w.executable.lower()
+                    or resolved_target in w.executable.lower()
+                ]
+            else:
+                filtered_windows = raw_windows
+
+            duration_ms = (time.monotonic() - t0) * 1000
+
+            result = DesktopObservationResult(
+                active_application=active_app,
+                active_window=active_window,
+                windows=filtered_windows,
+                observation_success=True,
+                details={
+                    "window_count": len(filtered_windows),
+                    "total_allowlisted_windows": len(raw_windows),
+                    "active_application": active_app,
+                    "active_title": active_window.title[:80] if active_window else None,
+                    "target_app": target_app,
+                    "duration_ms": duration_ms,
+                },
+            )
+
+            await action_bus.publish(
+                ActionEvent(
+                    action_type=ActionType.DESKTOP_OBSERVATION_COMPLETED,
+                    status=ActionStatus.COMPLETED,
+                    title=f"Desktop state observed ({len(filtered_windows)} window(s), active={active_app or 'None'})",
+                    task_id=task_id,
+                    duration_ms=duration_ms,
+                    safe_metadata={
+                        "window_count": len(filtered_windows),
+                        "active_application": active_app,
+                        "active_title": active_window.title[:60] if active_window else None,
+                        "success": True,
+                    },
+                )
+            )
+
+            return result
+
+        except Exception as exc:
+            duration_ms = (time.monotonic() - t0) * 1000
+            err_msg = str(exc)
+            logger.debug(f"[OBSERVER] Desktop observation error: {err_msg}")
+
+            await action_bus.publish(
+                ActionEvent(
+                    action_type=ActionType.DESKTOP_OBSERVATION_COMPLETED,
+                    status=ActionStatus.FAILED,
+                    title="Desktop state observation failed",
+                    task_id=task_id,
+                    duration_ms=duration_ms,
+                    safe_metadata={"error": err_msg, "success": False},
+                )
+            )
+
+            return DesktopObservationResult(
+                active_application=None,
+                active_window=None,
+                windows=[],
+                observation_success=False,
+                error=err_msg,
+                details={"duration_ms": duration_ms},
+            )
 
     async def observe_browser(self, session_id: Optional[str] = None) -> Optional[ObservationRecord]:
         """Inspect currently active browser page, DOM, and URL."""

@@ -4,4 +4,12 @@ Provides native Windows desktop observation, semantic target resolution,
 and controlled action execution.
 """
 
-__all__ = []
+from app.desktop.interaction import WindowsDesktopDriver, desktop_driver
+from app.desktop.resolver import DesktopTargetResolver, desktop_target_resolver
+
+__all__ = [
+    "WindowsDesktopDriver",
+    "desktop_driver",
+    "DesktopTargetResolver",
+    "desktop_target_resolver",
+]

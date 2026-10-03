@@ -175,7 +175,11 @@ export function ControlPlanePanel() {
         <div className="p-2 rounded bg-background/40 border border-border/40 space-y-2">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
-              <StatusIndicator tone={statusTone(activeControl.status)} pulse={["EXECUTING", "PLANNING", "WAITING_CONFIRMATION"].includes(activeControl.status)} />
+              <StatusIndicator
+                label={activeControl.status}
+                tone={statusTone(activeControl.status)}
+                pulse={["EXECUTING", "PLANNING", "WAITING_CONFIRMATION"].includes(activeControl.status)}
+              />
               <span className="font-semibold text-[11px]">{activeControl.status}</span>
             </div>
             <span className="text-[9px] text-muted-foreground">{activeControl.control_id}</span>

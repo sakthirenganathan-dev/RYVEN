@@ -120,6 +120,10 @@ def real_git_project():
     root = get_projects_root()
     p_name = "M11_Test_Git_Project"
     p_dir = os.path.join(root, p_name)
+
+    # Ensure the fixture always starts from a fresh sandbox repository.
+    if os.path.isdir(p_dir):
+        shutil.rmtree(p_dir, ignore_errors=True)
     os.makedirs(p_dir, exist_ok=True)
 
     # Initialize git repository

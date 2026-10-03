@@ -37,7 +37,41 @@ class CheckpointStore:
         self.db_path = db_path if db_path and str(db_path) == ":memory:" else (Path(db_path) if db_path else DEFAULT_DB_PATH)
         self._lock = threading.Lock()
         self._mem_conn: Optional[sqlite3.Connection] = None
+        self._recover_if_corrupt_db()
         self._init_db()
+
+    def _recover_if_corrupt_db(self) -> None:
+        """Replace invalid SQLite files with a fresh database to avoid import-time crashes."""
+        if str(self.db_path) == ":memory:":
+            return
+
+        db_path = Path(self.db_path)
+        if not db_path.exists() or not db_path.is_file():
+            return
+
+        try:
+            probe = sqlite3.connect(str(db_path), timeout=10.0)
+            try:
+                probe.execute("SELECT name FROM sqlite_master LIMIT 1")
+                return
+            finally:
+                probe.close()
+        except sqlite3.DatabaseError:
+            backup_path = db_path.with_name(f"{db_path.name}.corrupt-{threading.get_ident()}-{int(os.times().elapsed * 1000)}")
+            counter = 1
+            while backup_path.exists():
+                backup_path = db_path.with_name(f"{db_path.name}.corrupt-{threading.get_ident()}-{counter}")
+                counter += 1
+
+            try:
+                db_path.replace(backup_path)
+                logger.warning("[CHECKPOINT_STORE] Invalid SQLite checkpoint database detected; replaced %s with backup %s", db_path, backup_path)
+            except Exception as exc:
+                logger.warning("[CHECKPOINT_STORE] Could not rotate invalid database %s: %s", db_path, exc)
+                try:
+                    db_path.unlink()
+                except Exception:
+                    pass
 
     @contextmanager
     def _connection(self):
@@ -61,6 +95,24 @@ class CheckpointStore:
                 conn.close()
             except Exception:
                 pass
+
+    def _init_db(self) -> None:
+        """Initialize tables and verify schema version."""
+    def close(self) -> None:
+        """Release any in-memory SQLite connection so temp DB files can be cleaned up on Windows."""
+        with self._lock:
+            if self._mem_conn is not None:
+                try:
+                    self._mem_conn.close()
+                except Exception:
+                    pass
+                self._mem_conn = None
+
+    def __del__(self) -> None:
+        try:
+            self.close()
+        except Exception:
+            pass
 
     def _init_db(self) -> None:
         """Initialize tables and verify schema version."""
