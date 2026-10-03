@@ -267,28 +267,29 @@ class DesktopTargetResolver:
 
         # 3. Normalized text match
         if elem_text_norm and elem_text_norm == target_norm:
-            return 0.95
+            return 0.98
 
         # 4. Role + text match (e.g. "search button" -> role="button", text="search")
         if target_role and target_role == elem_role_norm:
-            for word in target_words:
-                if word and word in elem_text_norm:
-                    return 0.92
+            matched = [w for w in target_words if w in elem_text_norm]
+            if matched:
+                return 0.95
 
-        # 5. Full phrase containment or word containment
+        # 5. Full phrase containment or prefix
         if target_norm and target_norm in elem_text_norm:
-            return 0.88
+            return 0.94 if elem_text_norm.startswith(target_norm) else 0.90
 
+        # 6. OCR specific match
+        if elem.source == DesktopTargetSource.OCR and any(w in elem_text_norm for w in target_words):
+            return 0.90
+
+        # Word containment
         if target_words:
             matched_words = [w for w in target_words if w in elem_text_norm]
             if len(matched_words) == len(target_words):
-                return 0.85
+                return 0.86
             elif len(matched_words) > 0 and len(matched_words) >= len(target_words) / 2:
                 return 0.75 * (len(matched_words) / len(target_words))
-
-        # 6. OCR specific match
-        if elem.source == DesktopTargetSource.OCR and target_norm in elem_text_norm:
-            return 0.82
 
         # 7. Controlled fuzzy similarity
         if elem_text_norm:
@@ -314,12 +315,17 @@ class DesktopTargetResolver:
             return None, 0.0, "Empty target specification", FailureClass.TARGET_NOT_FOUND
 
         # Parse potential role keyword from target
-        target_words = target_norm.split()
+        all_words = target_norm.split()
         target_role: Optional[str] = None
-        for word in target_words:
-            if word in _ROLE_KEYWORDS:
+        target_words: List[str] = []
+        for word in all_words:
+            if word in _ROLE_KEYWORDS and target_role is None:
                 target_role = _ROLE_KEYWORDS[word]
-                break
+            else:
+                target_words.append(word)
+
+        if not target_words:
+            target_words = all_words
 
         scored_candidates: List[Tuple[DesktopUIElement, float, float]] = []
 
