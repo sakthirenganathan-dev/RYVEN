@@ -7,7 +7,7 @@ registered tools, preventing context saturation and errant tool hallucinations.
 from __future__ import annotations
 
 import re
-from typing import Dict, List, Set
+from typing import Any, Dict, List, Set
 from app.agent.models import CapabilityGroup
 from app.tools.registry import ToolRegistry
 

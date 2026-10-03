@@ -1,0 +1,26 @@
+[MAIN]
+init-hook='import sys; sys.path.insert(0, "backend")'
+fail-under=7.0
+ignore=tests,scripts,node_modules,.git,.output,RAVAN
+ignore-patterns=^test_.*\.py$,^verify_.*\.py$
+
+[MESSAGES CONTROL]
+disable=
+    duplicate-code,
+    line-too-long,
+    missing-module-docstring,
+    missing-class-docstring,
+    missing-function-docstring,
+    too-many-arguments,
+    too-many-positional-arguments,
+    too-many-locals,
+    too-many-branches,
+    too-many-statements,
+    logging-fstring-interpolation,
+    broad-exception-caught,
+    too-few-public-methods,
+    cyclic-import,
+    import-outside-toplevel
+
+[REPORTS]
+score=yes

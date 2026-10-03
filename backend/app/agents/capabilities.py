@@ -6,7 +6,7 @@ Ensures agents operate strictly through registered, validated tools.
 
 from __future__ import annotations
 
-from typing import Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set
 from app.agents.models import AgentCapability, AgentRole
 from app.tools.registry import ToolRegistry
 

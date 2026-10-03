@@ -805,6 +805,7 @@ class TestDesktopTargetResolverPhase4:
     async def test_4_2_driver_reuse(self):
         """2. Resolver reuses WindowsDesktopDriver for window inspection and screenshot capture."""
         from unittest.mock import MagicMock, AsyncMock
+        # pyrefly: ignore [missing-import]
         from PIL import Image
         from app.desktop.resolver import DesktopTargetResolver
         from app.control.models import DesktopWindowState
@@ -837,6 +838,7 @@ class TestDesktopTargetResolverPhase4:
     async def test_4_3_perception_agent_reuse(self):
         """3. Resolver passes transient image to PerceptionAgent.analyze_screenshot."""
         from unittest.mock import MagicMock, AsyncMock
+        # pyrefly: ignore [missing-import]
         from PIL import Image
         from app.desktop.resolver import DesktopTargetResolver
         from app.control.models import DesktopWindowState
@@ -874,6 +876,7 @@ class TestDesktopTargetResolverPhase4:
         import tempfile
         import os
         from unittest.mock import MagicMock, AsyncMock
+        # pyrefly: ignore [missing-import]
         from PIL import Image
         from app.desktop.resolver import DesktopTargetResolver
         from app.control.models import DesktopWindowState

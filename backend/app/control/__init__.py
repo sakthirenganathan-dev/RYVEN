@@ -15,14 +15,14 @@ from app.control.permissions import (
     PermissionCheckResult,
     permission_manager,
 )
-from app.control.observer import (
-    ObserverEngine,
-    observer_engine,
-)
-from app.control.engine import (
-    RyvenControlEngine,
-    ryven_control_engine,
-)
+def __getattr__(name: str):
+    if name in ("ObserverEngine", "observer_engine"):
+        import app.control.observer as obs
+        return getattr(obs, name)
+    if name in ("RyvenControlEngine", "ryven_control_engine"):
+        import app.control.engine as eng
+        return getattr(eng, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 __all__ = [
     "ControlRequest",
