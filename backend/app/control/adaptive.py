@@ -388,6 +388,8 @@ class AdaptiveComputerUseController:
         except Exception:
             return None
 
+    browser_engine = browser
+
     # -----------------------------------------------------------------------
     # Telemetry Helper (Safe Payload Only)
     # -----------------------------------------------------------------------

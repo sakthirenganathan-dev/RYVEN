@@ -621,6 +621,64 @@ class RyvenControlEngine:
             session_id=session_id,
         )
 
+    @property
+    def task_orchestrator(self) -> Any:
+        if hasattr(self, "_task_orchestrator") and self._task_orchestrator is not None:
+            return self._task_orchestrator
+        from app.control.task import unified_task_orchestrator
+        return unified_task_orchestrator
+
+    @task_orchestrator.setter
+    def task_orchestrator(self, orchestrator: Any) -> None:
+        self._task_orchestrator = orchestrator
+
+    async def execute_unified_task(
+        self,
+        goal_or_task: Any,
+        auto_confirm: bool = False,
+        session_id: str = "default",
+        timeout_sec: float = 300.0,
+    ) -> Any:
+        """Execute a multimodal goal or UnifiedTask through the UnifiedTaskOrchestrator."""
+        if isinstance(goal_or_task, str):
+            task = await self.task_orchestrator.create_task(goal_or_task)
+        else:
+            task = goal_or_task
+        return await self.task_orchestrator.execute_task(
+            task_or_id=task,
+            auto_confirm=auto_confirm,
+            session_id=session_id,
+            timeout_sec=timeout_sec,
+        )
+
+    execute_task = execute_unified_task
+
+    async def plan_unified_task(self, goal_or_task: Any) -> Any:
+        """Plan a multimodal goal or UnifiedTask through the UnifiedTaskOrchestrator."""
+        if isinstance(goal_or_task, str):
+            task = await self.task_orchestrator.create_task(goal_or_task)
+        else:
+            task = goal_or_task
+        return await self.task_orchestrator.plan_task(task)
+
+    plan_task = plan_unified_task
+
+    async def confirm_unified_task(self, task_id: str, confirmation_token: str) -> Any:
+        """Confirm a waiting task through the UnifiedTaskOrchestrator."""
+        return await self.task_orchestrator.confirm_task(task_id, confirmation_token)
+
+    confirm_task = confirm_unified_task
+
+    async def cancel_unified_task(self, task_id: str, reason: str = "User cancelled") -> Any:
+        """Cancel an in-flight task through the UnifiedTaskOrchestrator."""
+        return await self.task_orchestrator.cancel_task(task_id, reason=reason)
+
+    cancel_task = cancel_unified_task
+
+    def get_task_status(self, task_id: str) -> Any:
+        """Get the current status and state of a UnifiedTask by ID."""
+        return self.task_orchestrator.get_task(task_id)
+
     # Aliases for compatibility
     confirm_action = confirm_control
     cancel_execution = cancel_control
