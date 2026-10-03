@@ -351,12 +351,31 @@ class CapabilityPermissionManager:
             arguments=args,
         )
         if not guard_res.allowed:
-            return PermissionCheckResult(
-                allowed=False,
-                category=category,
-                reason=guard_res.reason,
-                risk_level=guard_res.risk_level,
-            )
+            if guard_res.risk_level == "confirm":
+                if not token:
+                    token = self.confirmation_mgr.request_confirmation(
+                        action_name=clean_tool,
+                        parameters=args,
+                    )
+                if auto_confirm or confirmed:
+                    self.confirmation_mgr.confirm(token)
+                else:
+                    return PermissionCheckResult(
+                        allowed=False,
+                        category=category,
+                        requires_confirmation=True,
+                        confirmation_token=token,
+                        confirmation_type=conf_type or clean_tool.upper(),
+                        reason=guard_res.reason,
+                        risk_level="high",
+                    )
+            else:
+                return PermissionCheckResult(
+                    allowed=False,
+                    category=category,
+                    reason=guard_res.reason,
+                    risk_level=guard_res.risk_level,
+                )
 
         # 4. Safe or confirmed action allowed
         return PermissionCheckResult(

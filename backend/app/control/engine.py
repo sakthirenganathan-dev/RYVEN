@@ -33,7 +33,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 import uuid
 
 from app.actions.event_bus import action_bus
@@ -483,6 +483,62 @@ class RyvenControlEngine:
             request=request,
             auto_confirm=auto_confirm,
             task_id=task_id,
+        )
+
+    @property
+    def workflow_engine(self) -> Any:
+        if hasattr(self, "_workflow_engine") and self._workflow_engine is not None:
+            return self._workflow_engine
+        from app.control.workflow import computer_workflow_engine
+        return computer_workflow_engine
+
+    @workflow_engine.setter
+    def workflow_engine(self, engine: Any) -> None:
+        self._workflow_engine = engine
+
+    async def execute_computer_workflow(
+        self,
+        goal_or_plan: Any,
+        auto_confirm: bool = False,
+        session_id: str = "default",
+    ) -> Any:
+        """Execute multi-step computer-use workflow via ComputerWorkflowEngine."""
+        return await self.workflow_engine.execute_workflow(
+            workflow=goal_or_plan,
+            auto_confirm=auto_confirm,
+            session_id=session_id,
+        )
+
+    async def plan_computer_workflow(
+        self,
+        goal: str,
+        context: Optional[Dict[str, Any]] = None,
+    ) -> Any:
+        """Decompose computer-use goal via ComputerWorkflowEngine."""
+        return await self.workflow_engine.plan_workflow(goal=goal, context=context)
+
+    async def confirm_computer_workflow(
+        self,
+        workflow_id: str,
+        confirmation_token: Optional[str] = None,
+        approved: bool = True,
+    ) -> Any:
+        """Confirm or reject paused computer-use workflow."""
+        return await self.workflow_engine.confirm_workflow(
+            workflow_id=workflow_id,
+            confirmation_token=confirmation_token,
+            approved=approved,
+        )
+
+    async def cancel_computer_workflow(
+        self,
+        workflow_id: str,
+        reason: str = "User requested cancellation",
+    ) -> Any:
+        """Cancel active computer-use workflow."""
+        return await self.workflow_engine.cancel_workflow(
+            workflow_id=workflow_id,
+            reason=reason,
         )
 
     # Aliases for compatibility

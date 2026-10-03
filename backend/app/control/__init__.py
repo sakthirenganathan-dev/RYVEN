@@ -22,6 +22,16 @@ def __getattr__(name: str):
     if name in ("RyvenControlEngine", "ryven_control_engine"):
         import app.control.engine as eng
         return getattr(eng, name)
+    if name in (
+        "ComputerWorkflowEngine",
+        "computer_workflow_engine",
+        "ComputerWorkflowPlan",
+        "ComputerWorkflowStep",
+        "ComputerWorkflowState",
+        "ComputerWorkflowResult",
+    ):
+        import app.control.workflow as wf
+        return getattr(wf, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 __all__ = [
@@ -40,4 +50,10 @@ __all__ = [
     "observer_engine",
     "RyvenControlEngine",
     "ryven_control_engine",
+    "ComputerWorkflowEngine",
+    "computer_workflow_engine",
+    "ComputerWorkflowPlan",
+    "ComputerWorkflowStep",
+    "ComputerWorkflowState",
+    "ComputerWorkflowResult",
 ]

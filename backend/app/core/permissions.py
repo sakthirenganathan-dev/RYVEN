@@ -211,7 +211,7 @@ class SafetyGuard:
             "web_upload",
             "web_verify_download",
             "web_verify_upload",
-            # M17 Process tools & browser vision/OCR & aliases
+            # M17 Process tools & browser vision/OCR & desktop interaction tools
             "inspect_applications",
             "focus_application",
             "close_application",
@@ -220,6 +220,15 @@ class SafetyGuard:
             "read_file",
             "web_search",
             "fetch_web_content",
+            "desktop_inspect",
+            "desktop_focus",
+            "desktop_click",
+            "desktop_double_click",
+            "desktop_right_click",
+            "desktop_type",
+            "desktop_key",
+            "desktop_hotkey",
+            "desktop_scroll",
         }
 
 

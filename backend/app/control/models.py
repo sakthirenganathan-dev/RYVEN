@@ -14,7 +14,7 @@ import time
 from typing import Any, Dict, List, Optional
 import uuid
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 def _utc_now_iso() -> str:
@@ -74,6 +74,13 @@ class FailureClass(str, Enum):
     FOCUS_FAILED = "FOCUS_FAILED"
     ACTION_TIMEOUT = "ACTION_TIMEOUT"
     VISION_UNCERTAIN = "VISION_UNCERTAIN"
+    # M17.2 Computer-Use Workflow Failure Taxonomy
+    PERMISSION_DENIED = "PERMISSION_DENIED"
+    CONFIRMATION_REQUIRED = "CONFIRMATION_REQUIRED"
+    NAVIGATION_FAILED = "NAVIGATION_FAILED"
+    VERIFICATION_FAILED = "VERIFICATION_FAILED"
+    AMBIGUOUS_TARGET = "AMBIGUOUS_TARGET"
+    PROMPT_INJECTION_DETECTED = "PROMPT_INJECTION_DETECTED"
 
 
 # ---------------------------------------------------------------------------
@@ -192,6 +199,24 @@ class DesktopTargetResolutionResult(BaseModel):
     error: Optional[str] = None
     details: Dict[str, Any] = Field(default_factory=dict)
 
+    @model_validator(mode="before")
+    @classmethod
+    def _remap_aliases(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            if "resolution_success" in data and "success" not in data:
+                data["success"] = data.pop("resolution_success")
+            if "target_description" in data and "target" not in data:
+                data["target"] = data.pop("target_description")
+        return data
+
+    @property
+    def resolution_success(self) -> bool:
+        return self.success
+
+    @property
+    def target_description(self) -> str:
+        return self.target
+
     @property
     def center_x(self) -> Optional[int]:
         return self.element.center_x if self.element else None
@@ -242,6 +267,22 @@ class DesktopActionRequest(BaseModel):
     hotkey: Optional[List[str]] = Field(None, description="Structured hotkey combination (e.g. ['ctrl', 's'])")
     scroll_amount: Optional[int] = Field(None, ge=-10000, le=10000, description="Wheel scroll delta")
     confirmed: bool = Field(False, description="User confirmation status for consequential actions")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _remap_aliases(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            if "target_description" in data and "target" not in data:
+                data["target"] = data.pop("target_description")
+            if "keys" in data and "hotkey" not in data:
+                data["hotkey"] = data.pop("keys")
+            if "amount" in data and "scroll_amount" not in data:
+                data["scroll_amount"] = data.pop("amount")
+        return data
+
+    @property
+    def target_description(self) -> Optional[str]:
+        return self.target
 
     @field_validator("key")
     @classmethod
