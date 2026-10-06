@@ -651,10 +651,14 @@ class UnifiedTaskOrchestrator:
 
             # Action Duplication Check on non-idempotent actions
             wf_step_equivalent = ComputerWorkflowStep(
+                step_id=current_step.step_id,
                 name=current_step.name,
                 capability=current_step.capability.value,
                 action=current_step.action,
-                expected_state=current_step.expected_state,
+                target_description=current_step.target,
+                arguments=dict(current_step.arguments or {}),
+                application_context=current_step.application_context,
+                expected_state=dict(current_step.expected_state or {}),
             )
             if self.adaptive_controller.check_duplication_protection(wf_step_equivalent, obs):
                 current_step.status = UnifiedTaskStatus.COMPLETED
@@ -743,6 +747,9 @@ class UnifiedTaskOrchestrator:
             await self._save_checkpoint(task)
             return self._build_result(task, success=False, message=task.result_summary)
 
+        if confirmation_token and task.active_confirmation_token and confirmation_token != task.active_confirmation_token:
+            raise ValueError(f"Confirmation token '{confirmation_token}' does not match expected active token.")
+
         # User approved: confirm token and resume execution
         tok = confirmation_token or task.active_confirmation_token
         if tok:
@@ -751,6 +758,8 @@ class UnifiedTaskOrchestrator:
         task.active_confirmation_token = None
 
         return await self.execute_task(task, auto_confirm=True)
+
+    confirm_task = confirm_task_step
 
     async def cancel_task(self, task_id: str, reason: str = "User cancelled") -> UnifiedTaskResult:
         """Cancel an in-flight task immediately across all capabilities."""
@@ -813,6 +822,12 @@ class UnifiedTaskOrchestrator:
                 "status": task.status.value,
             },
         )
+        try:
+            from app.control.e2e import task_history_store
+            task_history_store.record_result(res, task)
+        except Exception:
+            pass
+        return res
 
 
 # Default singleton

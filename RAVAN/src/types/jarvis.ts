@@ -1,7 +1,13 @@
-/**
- * Core states representing the RYVEN AI lifecycle.
- */
-export type CoreState = "boot" | "idle" | "listening" | "thinking" | "executing" | "speaking";
+export type CoreState =
+  | "boot"
+  | "idle"
+  | "listening"
+  | "transcribing"
+  | "thinking"
+  | "executing"
+  | "speaking"
+  | "interrupted"
+  | "error";
 
 /**
  * Spatial HUD viewport modes.

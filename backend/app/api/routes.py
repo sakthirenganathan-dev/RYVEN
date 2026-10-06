@@ -1376,10 +1376,146 @@ async def get_permissions_catalog_endpoint() -> Dict[str, Any]:
     return permission_manager.get_permission_catalog()
 
 
+# ===========================================================================
+# M17.6 Voice, Conversation & Multimodal Perception Endpoints
+# ===========================================================================
+
+@router.post("/voice/transcribe")
+@router.post("/v1/voice/transcribe")
+async def voice_transcribe_endpoint(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Transcribe base64-encoded audio or mock audio into structured VoiceTranscript."""
+    import base64
+    from app.voice import voice_input_engine
+
+    raw_b64 = payload.get("audio_base64", "")
+    audio_format = payload.get("audio_format", "wav")
+    language = payload.get("language", "en")
+
+    try:
+        audio_bytes = base64.b64decode(raw_b64) if raw_b64 else b""
+    except Exception:
+        audio_bytes = b""
+
+    transcript = await voice_input_engine.process_audio(
+        audio_bytes=audio_bytes,
+        audio_format=audio_format,
+        language=language,
+    )
+    return transcript.model_dump()
 
 
+@router.post("/voice/speak")
+@router.post("/v1/voice/speak")
+async def voice_speak_endpoint(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Synthesize sanitized assistant text into speech with barge-in support."""
+    import base64
+    from app.voice import voice_output_engine
+
+    text = payload.get("text", "")
+    voice = payload.get("voice", "default")
+    speed = float(payload.get("speed", 1.0))
+
+    result = await voice_output_engine.speak(raw_text=text, voice=voice, speed=speed)
+    dumped = result.model_dump()
+    if dumped.get("audio_bytes"):
+        dumped["audio_base64"] = base64.b64encode(dumped.pop("audio_bytes")).decode("ascii")
+    else:
+        dumped.pop("audio_bytes", None)
+        dumped["audio_base64"] = ""
+    return dumped
 
 
+@router.post("/voice/interrupt")
+@router.post("/v1/voice/interrupt")
+async def voice_interrupt_endpoint(payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Immediately stop voice output (barge-in) and cancel active listening."""
+    from app.control.engine import ryven_control_engine
+
+    ryven_control_engine.interrupt_voice()
+    return {"status": "INTERRUPTED", "message": "Voice synthesis and reception interrupted."}
 
 
+@router.post("/conversation/message")
+@router.post("/v1/conversation/message")
+async def conversation_message_endpoint(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Process a natural conversational message or voice instruction with full context tracking."""
+    from fastapi import HTTPException
+    from app.control.conversation import conversation_manager
 
+    message = payload.get("message") or payload.get("text")
+    if not message or not isinstance(message, str):
+        raise HTTPException(status_code=400, detail="Missing required 'message' string.")
+
+    confidence = float(payload.get("confidence", 1.0))
+    auto_confirm = bool(payload.get("auto_confirm", False))
+    session_id = payload.get("session_id", "default")
+
+    response = await conversation_manager.process_user_message(
+        message=message,
+        voice_confidence=confidence,
+        auto_confirm=auto_confirm,
+        session_id=session_id,
+    )
+    return response.model_dump()
+
+
+@router.post("/conversation/cancel")
+@router.post("/v1/conversation/cancel")
+async def conversation_cancel_endpoint(payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Cancel the active task associated with the conversational session."""
+    from app.control.conversation import conversation_manager
+
+    session_id = (payload or {}).get("session_id", "default")
+    ctx = conversation_manager.get_context(session_id)
+    if ctx.active_task_id:
+        from app.control.task import unified_task_orchestrator
+        await unified_task_orchestrator.cancel_task(ctx.active_task_id, reason="User cancelled conversation.")
+        ctx.clear()
+        return {"status": "CANCELLED", "task_id": ctx.active_task_id, "session_id": session_id}
+
+    return {"status": "IDLE", "message": "No active conversational task to cancel.", "session_id": session_id}
+
+
+@router.get("/conversation/context")
+@router.get("/v1/conversation/context")
+async def get_conversation_context_endpoint(session_id: str = "default") -> Dict[str, Any]:
+    """Retrieve safe, bounded conversational context and active task pointers."""
+    from app.control.conversation import conversation_manager
+
+    ctx = conversation_manager.get_context(session_id)
+    return {
+        "session_id": session_id,
+        "turns_count": len(ctx.turns),
+        "active_task_id": ctx.active_task_id,
+        "active_task_status": ctx.active_task_status.value if ctx.active_task_status else None,
+        "last_mentioned_app": ctx.last_mentioned_app,
+        "last_mentioned_url": ctx.last_mentioned_url,
+        "pending_confirmation": ctx.pending_confirmation_token is not None,
+        "recent_turns": [t.model_dump() for t in ctx.get_recent_turns(5)],
+    }
+
+
+@router.get("/multimodal/context")
+@router.get("/v1/multimodal/context")
+async def get_multimodal_context_endpoint(target_app: Optional[str] = None, session_id: str = "default") -> Dict[str, Any]:
+    """Inspect safe, aggregated desktop, browser, and visual context."""
+    from app.control.multimodal import multimodal_context_engine
+
+    ctx = await multimodal_context_engine.gather_context(target_app=target_app, session_id=session_id)
+    return ctx.model_dump()
+
+
+@router.post("/multimodal/query")
+@router.post("/v1/multimodal/query")
+async def multimodal_query_endpoint(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Answer natural-language visual questions descriptively without action execution."""
+    from fastapi import HTTPException
+    from app.control.multimodal import multimodal_context_engine
+
+    query = payload.get("query") or payload.get("question")
+    if not query or not isinstance(query, str):
+        raise HTTPException(status_code=400, detail="Missing required 'query' parameter.")
+
+    session_id = payload.get("session_id", "default")
+    answer = await multimodal_context_engine.answer_visual_query(query=query, session_id=session_id)
+    return {"query": query, "answer": answer}

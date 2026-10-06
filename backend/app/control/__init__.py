@@ -66,6 +66,39 @@ def __getattr__(name: str):
     ):
         import app.control.task as utask
         return getattr(utask, name)
+    if name in (
+        "CanonicalScenarioType",
+        "CANONICAL_SCENARIOS",
+        "ScenarioSpecification",
+        "TaskHistoryEntry",
+        "TaskHistoryStore",
+        "task_history_store",
+        "TaskResumptionManager",
+        "format_user_friendly_failure",
+        "TaskLatencyTracker",
+        "verify_task_isolation",
+        "E2EValidationFramework",
+        "e2e_validation_framework",
+    ):
+        import app.control.e2e as e2e_mod
+        return getattr(e2e_mod, name)
+    if name in (
+        "ConversationTurn",
+        "ConversationContext",
+        "ConversationManager",
+        "ConversationalIntentType",
+        "ConversationalResponse",
+        "conversation_manager",
+    ):
+        import app.control.conversation as conv_mod
+        return getattr(conv_mod, name)
+    if name in (
+        "MultimodalContext",
+        "MultimodalContextEngine",
+        "multimodal_context_engine",
+    ):
+        import app.control.multimodal as multi_mod
+        return getattr(multi_mod, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 __all__ = [
@@ -112,4 +145,25 @@ __all__ = [
     "TaskCapabilityRouter",
     "UnifiedTaskOrchestrator",
     "unified_task_orchestrator",
+    "CanonicalScenarioType",
+    "CANONICAL_SCENARIOS",
+    "ScenarioSpecification",
+    "TaskHistoryEntry",
+    "TaskHistoryStore",
+    "task_history_store",
+    "TaskResumptionManager",
+    "format_user_friendly_failure",
+    "TaskLatencyTracker",
+    "verify_task_isolation",
+    "E2EValidationFramework",
+    "e2e_validation_framework",
+    "ConversationTurn",
+    "ConversationContext",
+    "ConversationManager",
+    "ConversationalIntentType",
+    "ConversationalResponse",
+    "conversation_manager",
+    "MultimodalContext",
+    "MultimodalContextEngine",
+    "multimodal_context_engine",
 ]

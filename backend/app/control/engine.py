@@ -679,6 +679,80 @@ class RyvenControlEngine:
         """Get the current status and state of a UnifiedTask by ID."""
         return self.task_orchestrator.get_task(task_id)
 
+    def get_task_history(self, limit: int = 50) -> List[Any]:
+        """Retrieve recent task execution history from the task history store."""
+        from app.control.e2e import task_history_store
+        return task_history_store.get_history(limit=limit)
+
+    def restore_task(self, checkpoint_data: Dict[str, Any], max_age_seconds: Optional[float] = None) -> Any:
+        """Restore and validate a UnifiedTask from a serialized checkpoint dictionary."""
+        from app.control.e2e import TaskResumptionManager
+        return TaskResumptionManager.restore_task_from_checkpoint(checkpoint_data, max_age_seconds=max_age_seconds)
+
+    # -----------------------------------------------------------------------
+    # M17.6 Conversational, Voice & Multimodal Control
+    # -----------------------------------------------------------------------
+
+    async def process_conversational_message(
+        self,
+        message: str,
+        voice_confidence: float = 1.0,
+        auto_confirm: bool = False,
+        session_id: str = "default",
+    ) -> Any:
+        """Process conversational user message with dialogue tracking and task routing."""
+        from app.control.conversation import conversation_manager
+        return await conversation_manager.process_user_message(
+            message=message,
+            voice_confidence=voice_confidence,
+            auto_confirm=auto_confirm,
+            session_id=session_id,
+        )
+
+    async def get_multimodal_context(
+        self,
+        target_app: Optional[str] = None,
+        include_vision: bool = True,
+        session_id: str = "default",
+    ) -> Any:
+        """Gather safe read-only situational context across desktop, browser, and vision."""
+        from app.control.multimodal import multimodal_context_engine
+        return await multimodal_context_engine.gather_context(
+            target_app=target_app,
+            include_vision=include_vision,
+            session_id=session_id,
+        )
+
+    async def answer_visual_query(self, query: str, session_id: str = "default") -> str:
+        """Answer natural-language visual questions descriptively without action execution."""
+        from app.control.multimodal import multimodal_context_engine
+        return await multimodal_context_engine.answer_visual_query(query=query, session_id=session_id)
+
+    async def transcribe_voice(
+        self,
+        audio_bytes: bytes,
+        audio_format: str = "wav",
+        language: str = "en",
+    ) -> Any:
+        """Transcribe speech audio into a sanitized VoiceTranscript."""
+        from app.voice import voice_input_engine
+        return await voice_input_engine.process_audio(
+            audio_bytes=audio_bytes,
+            audio_format=audio_format,
+            language=language,
+        )
+
+    async def speak_text(self, text: str, voice: str = "default") -> Any:
+        """Synthesize sanitized assistant text into speech with barge-in support."""
+        from app.voice import voice_output_engine
+        return await voice_output_engine.speak(raw_text=text, voice=voice)
+
+    def interrupt_voice(self) -> None:
+        """Interrupt active voice output or input immediately."""
+        from app.voice import voice_input_engine, voice_output_engine
+        voice_output_engine.stop()
+        voice_input_engine.interrupt()
+
     # Aliases for compatibility
     confirm_action = confirm_control
     cancel_execution = cancel_control

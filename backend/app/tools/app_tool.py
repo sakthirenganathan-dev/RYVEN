@@ -152,7 +152,7 @@ class OpenApplicationTool(BaseTool):
 
     async def execute(self, **kwargs: Any) -> Dict[str, Any]:
         """Execute the application opening action safely."""
-        app_input = kwargs.get("application", "").strip()
+        app_input = (kwargs.get("application") or kwargs.get("app_name") or kwargs.get("app") or "").strip()
         if not app_input:
             return {
                 "success": False,

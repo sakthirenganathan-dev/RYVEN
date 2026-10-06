@@ -508,13 +508,13 @@ class ComputerWorkflowEngine:
             steps.extend([step1, step2, step3])
 
         # Scenario 2: Multi-step Notepad interaction (type, save)
-        elif "notepad" in g_lower:
+        elif "notepad" in g_lower and any(k in g_lower for k in ("type", "write", "save", "edit", "enter")):
             step1 = ComputerWorkflowStep(
                 name="Open Notepad",
                 capability="desktop",
                 action="open_application",
                 application_context="Notepad",
-                arguments={"app_name": "notepad"},
+                arguments={"application": "notepad", "app_name": "notepad"},
                 expected_state={"window_active": "Notepad"},
             )
             step2 = ComputerWorkflowStep(
@@ -555,6 +555,18 @@ class ComputerWorkflowEngine:
                     expected_state={"saved": True},
                 )
                 steps.append(step4)
+
+        # Scenario 2b: Simple Open Notepad
+        elif "notepad" in g_lower:
+            step1 = ComputerWorkflowStep(
+                name="Open Notepad",
+                capability="desktop",
+                action="open_application",
+                application_context="Notepad",
+                arguments={"application": "notepad", "app_name": "notepad"},
+                expected_state={"window_active": "Notepad"},
+            )
+            steps.append(step1)
 
         # Scenario 3: VS Code inspect project
         elif any(k in g_lower for k in ("vs code", "vscode", "code")):

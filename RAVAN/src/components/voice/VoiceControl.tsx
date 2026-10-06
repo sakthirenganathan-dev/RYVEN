@@ -6,9 +6,12 @@ const LABEL: Record<CoreState, string> = {
   boot: "STANDBY",
   idle: "MIC",
   listening: "LISTENING",
+  transcribing: "TRANSCRIBING",
   thinking: "PROCESSING",
   executing: "EXECUTING",
   speaking: "SPEAKING",
+  interrupted: "INTERRUPTED",
+  error: "ERROR",
 };
 
 export function VoiceControl({
