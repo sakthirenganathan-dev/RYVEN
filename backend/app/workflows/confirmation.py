@@ -126,6 +126,10 @@ class ConfirmationManager:
         }
         return token
 
+    def generate_token(self, action_name: str, parameters: Optional[Dict[str, Any]] = None) -> str:
+        """Alias for request_confirmation."""
+        return self.request_confirmation(action_name, parameters)
+
     def confirm(self, token: str) -> bool:
         """Mark a confirmation token as confirmed."""
         if token in self._pending_tokens:
@@ -166,3 +170,6 @@ class ConfirmationManager:
         if needs_confirm:
             logger.info(f"Workflow step '{step.name}' ({step.tool_name}) flagged for user confirmation.")
         return needs_confirm
+
+
+confirmation_manager = ConfirmationManager()

@@ -1519,3 +1519,191 @@ async def multimodal_query_endpoint(payload: Dict[str, Any]) -> Dict[str, Any]:
     session_id = payload.get("session_id", "default")
     answer = await multimodal_context_engine.answer_visual_query(query=query, session_id=session_id)
     return {"query": query, "answer": answer}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# M17.7 Long-Horizon Task Persistence & Autonomous Execution Endpoints
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.get("/tasks")
+@router.get("/v1/tasks")
+async def list_tasks_endpoint(
+    limit: int = 50,
+    state: Optional[str] = None,
+) -> Dict[str, Any]:
+    """List persistent multi-step long-horizon tasks with optional state filter."""
+    from app.control.long_horizon import long_horizon_task_manager, LongHorizonTaskState
+
+    state_filter = None
+    if state:
+        try:
+            state_filter = LongHorizonTaskState(state.upper())
+        except ValueError:
+            pass
+
+    tasks = long_horizon_task_manager.list_tasks(limit=limit, state=state_filter)
+    return {
+        "tasks": [t.model_dump() for t in tasks],
+        "count": len(tasks),
+        "limit": limit,
+    }
+
+
+@router.post("/tasks")
+@router.post("/v1/tasks")
+async def create_task_endpoint(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Create a new persistent long-horizon task, optionally executing immediately."""
+    from fastapi import HTTPException
+    from app.control.long_horizon import long_horizon_task_manager
+
+    goal = payload.get("goal")
+    if not goal or not isinstance(goal, str):
+        raise HTTPException(status_code=400, detail="Missing required 'goal' parameter.")
+
+    execute_now = bool(payload.get("execute", False))
+    auto_confirm = bool(payload.get("auto_confirm", False))
+    session_id = payload.get("session_id", "default")
+
+    task = await long_horizon_task_manager.create_long_horizon_task(goal=goal)
+
+    if execute_now:
+        progress = await long_horizon_task_manager.execute_task(
+            task.task_id,
+            auto_confirm=auto_confirm,
+            session_id=session_id,
+        )
+        return {
+            "task": task.model_dump(),
+            "progress": progress.model_dump(),
+        }
+
+    return {"task": task.model_dump()}
+
+
+@router.get("/tasks/{task_id}")
+@router.get("/v1/tasks/{task_id}")
+async def get_task_endpoint(task_id: str) -> Dict[str, Any]:
+    """Retrieve full persistent task graph, steps, and audit journal."""
+    from fastapi import HTTPException
+    from app.control.long_horizon import long_horizon_task_manager
+
+    task = long_horizon_task_manager.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail=f"Task '{task_id}' not found.")
+
+    return task.model_dump()
+
+
+@router.get("/tasks/{task_id}/progress")
+@router.get("/v1/tasks/{task_id}/progress")
+async def get_task_progress_endpoint(task_id: str) -> Dict[str, Any]:
+    """Retrieve lightweight, real-time progress snapshot for task UI timeline."""
+    from fastapi import HTTPException
+    from app.control.long_horizon import long_horizon_task_manager
+
+    progress = long_horizon_task_manager.get_progress(task_id)
+    if not progress:
+        raise HTTPException(status_code=404, detail=f"Task '{task_id}' not found.")
+
+    return progress.model_dump()
+
+
+@router.post("/tasks/{task_id}/pause")
+@router.post("/v1/tasks/{task_id}/pause")
+async def pause_task_endpoint(task_id: str) -> Dict[str, Any]:
+    """Pause an active long-horizon task gracefully at the current step boundary."""
+    from fastapi import HTTPException
+    from app.control.long_horizon import long_horizon_task_manager
+
+    task = long_horizon_task_manager.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail=f"Task '{task_id}' not found.")
+
+    progress = await long_horizon_task_manager.pause_task(task_id)
+    return {"status": "PAUSED", "progress": progress.model_dump()}
+
+
+@router.post("/tasks/{task_id}/resume")
+@router.post("/v1/tasks/{task_id}/resume")
+async def resume_task_endpoint(task_id: str, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Safely resume a paused, interrupted, or blocked task after re-validating state."""
+    from fastapi import HTTPException
+    from app.control.long_horizon import long_horizon_task_manager
+
+    task = long_horizon_task_manager.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail=f"Task '{task_id}' not found.")
+
+    auto_confirm = bool((payload or {}).get("auto_confirm", False))
+    session_id = (payload or {}).get("session_id", "default")
+
+    progress = await long_horizon_task_manager.resume_task(
+        task_id=task_id,
+        auto_confirm=auto_confirm,
+        session_id=session_id,
+    )
+    return {"status": "RESUMED", "progress": progress.model_dump()}
+
+
+@router.post("/tasks/{task_id}/cancel")
+@router.post("/v1/tasks/{task_id}/cancel")
+async def cancel_task_endpoint(task_id: str, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Immediately cancel an in-flight or pending long-horizon task."""
+    from fastapi import HTTPException
+    from app.control.long_horizon import long_horizon_task_manager
+
+    task = long_horizon_task_manager.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail=f"Task '{task_id}' not found.")
+
+    reason = (payload or {}).get("reason", "Cancelled via API")
+    progress = await long_horizon_task_manager.cancel_task(task_id, reason=reason)
+    return {"status": "CANCELLED", "progress": progress.model_dump()}
+
+
+@router.post("/tasks/{task_id}/retry")
+@router.post("/v1/tasks/{task_id}/retry")
+async def retry_task_endpoint(task_id: str, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Reset failed steps and restart long-horizon execution."""
+    from fastapi import HTTPException
+    from app.control.long_horizon import long_horizon_task_manager
+
+    task = long_horizon_task_manager.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail=f"Task '{task_id}' not found.")
+
+    auto_confirm = bool((payload or {}).get("auto_confirm", False))
+    session_id = (payload or {}).get("session_id", "default")
+
+    progress = await long_horizon_task_manager.retry_task(
+        task_id=task_id,
+        auto_confirm=auto_confirm,
+        session_id=session_id,
+    )
+    return {"status": "RETRYING", "progress": progress.model_dump()}
+
+
+@router.post("/tasks/{task_id}/confirm")
+@router.post("/v1/tasks/{task_id}/confirm")
+async def confirm_task_endpoint(task_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Approve or reject a consequential action paused for user confirmation."""
+    from fastapi import HTTPException
+    from app.control.long_horizon import long_horizon_task_manager
+
+    token = payload.get("token") or payload.get("confirmation_token")
+    approved = bool(payload.get("approved", True))
+    session_id = payload.get("session_id", "default")
+
+    if not token and approved:
+        raise HTTPException(status_code=400, detail="Missing required 'token' parameter.")
+
+    try:
+        progress = await long_horizon_task_manager.confirm_task_step(
+            task_id=task_id,
+            confirmation_token=token or "",
+            approved=approved,
+            session_id=session_id,
+        )
+        return {"status": "CONFIRMED" if approved else "REJECTED", "progress": progress.model_dump()}
+    except ValueError as val_err:
+        raise HTTPException(status_code=400, detail=str(val_err))

@@ -308,3 +308,63 @@ export async function fetchRunningApplications(): Promise<{
   }
   return res.json();
 }
+
+export interface LongHorizonProgress {
+  task_id: string;
+  state: string;
+  total_steps: number;
+  completed_steps: number;
+  failed_steps: number;
+  pending_steps: number;
+  current_step_id?: string;
+  current_step_name?: string;
+  progress_percent: number;
+  elapsed_ms: number;
+  estimated_remaining_ms?: number;
+  last_milestone: string;
+  next_action: string;
+  waiting_for_user: boolean;
+  requires_confirmation: boolean;
+  confirmation_token?: string;
+  failure_class?: string;
+  recovery_attempts: number;
+  safe_metadata: Record<string, unknown>;
+}
+
+export async function fetchLongTasksList(): Promise<{ tasks: Array<Record<string, unknown>>; count: number }> {
+  const res = await fetch(`${RYVEN_API_BASE_URL}/api/tasks`);
+  if (!res.ok) throw new Error(`Failed to fetch tasks: ${res.status}`);
+  return res.json();
+}
+
+export async function fetchLongTaskProgress(taskId: string): Promise<LongHorizonProgress> {
+  const res = await fetch(`${RYVEN_API_BASE_URL}/api/tasks/${taskId}/progress`);
+  if (!res.ok) throw new Error(`Failed to fetch task progress: ${res.status}`);
+  return res.json();
+}
+
+export async function pauseLongTask(taskId: string): Promise<{ status: string; progress: LongHorizonProgress }> {
+  const res = await fetch(`${RYVEN_API_BASE_URL}/api/tasks/${taskId}/pause`, { method: "POST" });
+  if (!res.ok) throw new Error(`Failed to pause task: ${res.status}`);
+  return res.json();
+}
+
+export async function resumeLongTask(taskId: string, autoConfirm: boolean = false): Promise<{ status: string; progress: LongHorizonProgress }> {
+  const res = await fetch(`${RYVEN_API_BASE_URL}/api/tasks/${taskId}/resume`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ auto_confirm: autoConfirm }),
+  });
+  if (!res.ok) throw new Error(`Failed to resume task: ${res.status}`);
+  return res.json();
+}
+
+export async function cancelLongTask(taskId: string, reason: string = "User cancelled"): Promise<{ status: string; progress: LongHorizonProgress }> {
+  const res = await fetch(`${RYVEN_API_BASE_URL}/api/tasks/${taskId}/cancel`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ reason }),
+  });
+  if (!res.ok) throw new Error(`Failed to cancel task: ${res.status}`);
+  return res.json();
+}

@@ -71,6 +71,16 @@ _CONTINUE_KEYWORDS = {
     "continue", "resume", "keep going",
 }
 
+_PAUSE_KEYWORDS = {
+    "pause", "pause task", "hold on", "stop for now", "pause execution", "wait a second", "take a break",
+}
+
+_STATUS_KEYWORDS = {
+    "status", "what are you doing", "what's left", "what is left", "task progress",
+    "how is it going", "what are you doing?", "what's left?", "what is left?",
+    "check status", "task status", "how much is left", "how much is left?",
+}
+
 _BLANKET_AUTHORIZATION_PHRASES = [
     "do whatever you need",
     "go ahead with everything",
@@ -90,6 +100,8 @@ class ConversationalIntentType(str, Enum):
     CANCELLATION = "CANCELLATION"
     RETRY = "RETRY"
     CONTINUE = "CONTINUE"
+    PAUSE = "PAUSE"
+    STATUS = "STATUS"
     CLARIFICATION_ANSWER = "CLARIFICATION_ANSWER"
     QUERY = "QUERY"
 
@@ -283,6 +295,16 @@ class ConversationManager:
             if lowered == kw or lowered.startswith(f"{kw} "):
                 return ConversationalIntentType.CONTINUE, "Continue task", None, None
 
+        # 5b. Check for Pause
+        for kw in _PAUSE_KEYWORDS:
+            if kw in lowered:
+                return ConversationalIntentType.PAUSE, "Pause active task", None, None
+
+        # 5c. Check for Status
+        for kw in _STATUS_KEYWORDS:
+            if kw in lowered:
+                return ConversationalIntentType.STATUS, "Report task status", None, None
+
         # 6. Check for Ambiguous References ("it", "that", "the app", "open it", "open that")
         if lowered in {"open it", "open that", "click it", "click that", "it", "that", "do that"}:
             if not ctx.last_mentioned_app and not ctx.last_mentioned_target:
@@ -453,6 +475,93 @@ class ConversationManager:
                 msg = "No recent task found to retry."
                 ctx.add_turn(ConversationTurn(speaker="ryven", text=msg, intent_type=intent))
                 return ConversationalResponse(message=msg, intent_type=intent, success=False)
+
+        # PAUSE
+        if intent == ConversationalIntentType.PAUSE:
+            task_id = ctx.active_task_id
+            if task_id:
+                try:
+                    from app.control.long_horizon import long_horizon_task_manager
+                    lh_task = long_horizon_task_manager.get_task(task_id)
+                    if lh_task:
+                        await long_horizon_task_manager.pause_task(task_id)
+                        msg = f"Task '{task_id}' has been paused. You can resume anytime by saying 'continue' or 'resume'."
+                    else:
+                        msg = f"Task '{task_id}' has been paused."
+                except Exception as exc:
+                    logger.warning(f"[CONVERSATION] Pause error: {exc}")
+                    msg = f"Task '{task_id}' paused."
+            else:
+                msg = "No active task to pause."
+
+            ctx.add_turn(ConversationTurn(speaker="ryven", text=msg, intent_type=intent))
+            return ConversationalResponse(
+                message=msg,
+                intent_type=intent,
+                task_id=task_id,
+                task_status="PAUSED" if task_id else None,
+                success=True,
+            )
+
+        # STATUS
+        if intent == ConversationalIntentType.STATUS:
+            task_id = ctx.active_task_id
+            from app.control.long_horizon import long_horizon_task_manager
+
+            snap = None
+            if task_id:
+                snap = long_horizon_task_manager.get_progress(task_id)
+
+            if not snap:
+                recent = long_horizon_task_manager.list_tasks(limit=1)
+                if recent:
+                    snap = recent[0].get_progress_snapshot()
+                    task_id = snap.task_id
+
+            if snap:
+                pct = int(snap.progress_percent)
+                curr = snap.current_step_name or snap.last_milestone
+                msg = f"Task '{snap.task_id}' is {snap.state.value.upper()} ({pct}% complete, {snap.completed_steps}/{snap.total_steps} steps). Current action: {curr}."
+                if snap.estimated_remaining_ms:
+                    sec = int(snap.estimated_remaining_ms / 1000)
+                    msg += f" Estimated remaining: ~{sec}s."
+            else:
+                msg = "No active tasks are currently running."
+
+            ctx.add_turn(ConversationTurn(speaker="ryven", text=msg, intent_type=intent))
+            return ConversationalResponse(
+                message=msg,
+                intent_type=intent,
+                task_id=task_id,
+                task_status=snap.state.value.upper() if snap else None,
+                success=True,
+            )
+
+        # CONTINUE
+        if intent == ConversationalIntentType.CONTINUE:
+            task_id = ctx.active_task_id
+            if task_id:
+                try:
+                    from app.control.long_horizon import long_horizon_task_manager
+                    lh_task = long_horizon_task_manager.get_task(task_id)
+                    if lh_task:
+                        await long_horizon_task_manager.resume_task(task_id, auto_confirm=auto_confirm, session_id=session_id)
+                        msg = f"Resuming task '{task_id}'."
+                    else:
+                        msg = f"Continuing task '{task_id}'."
+                except Exception as exc:
+                    logger.warning(f"[CONVERSATION] Continue error: {exc}")
+                    msg = f"Continuing task '{task_id}'."
+            else:
+                msg = "No paused task found to continue."
+
+            ctx.add_turn(ConversationTurn(speaker="ryven", text=msg, intent_type=intent))
+            return ConversationalResponse(
+                message=msg,
+                intent_type=intent,
+                task_id=task_id,
+                success=True,
+            )
 
         # 5. Route Normal / Follow-Up Task through UnifiedTaskOrchestrator
         try:

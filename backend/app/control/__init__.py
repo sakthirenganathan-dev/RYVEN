@@ -99,6 +99,18 @@ def __getattr__(name: str):
     ):
         import app.control.multimodal as multi_mod
         return getattr(multi_mod, name)
+    if name in (
+        "LongHorizonTaskState",
+        "LongHorizonTaskStep",
+        "TaskExecutionJournalEntry",
+        "TaskProgressSnapshot",
+        "LongHorizonTask",
+        "TaskPersistenceRepository",
+        "LongHorizonTaskManager",
+        "long_horizon_task_manager",
+    ):
+        import app.control.long_horizon as lh_mod
+        return getattr(lh_mod, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 __all__ = [
@@ -166,4 +178,12 @@ __all__ = [
     "MultimodalContext",
     "MultimodalContextEngine",
     "multimodal_context_engine",
+    "LongHorizonTaskState",
+    "LongHorizonTaskStep",
+    "TaskExecutionJournalEntry",
+    "TaskProgressSnapshot",
+    "LongHorizonTask",
+    "TaskPersistenceRepository",
+    "LongHorizonTaskManager",
+    "long_horizon_task_manager",
 ]
