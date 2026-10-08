@@ -31,6 +31,7 @@ class ModelProvider(str, Enum):
     OLLAMA = "OLLAMA"
     HUGGINGFACE_LOCAL = "HUGGINGFACE_LOCAL"
     HUGGINGFACE_REMOTE = "HUGGINGFACE_REMOTE"
+    GROK = "GROK"
 
 
 class ModelProfile(BaseModel):
