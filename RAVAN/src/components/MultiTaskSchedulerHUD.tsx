@@ -78,9 +78,12 @@ export function MultiTaskSchedulerHUD() {
           // Task might have terminated or transitioned
         }
       } else if (sQueue.length > 0 && !taskDetail) {
-        setSelectedTaskId(sQueue[0].task_id);
-        const detail = await getTask(sQueue[0].task_id);
-        setTaskDetail(detail);
+        const first = sQueue[0];
+        if (first) {
+          setSelectedTaskId(first.task_id);
+          const detail = await getTask(first.task_id);
+          setTaskDetail(detail);
+        }
       }
     } catch (err) {
       console.warn("Scheduler refresh error:", err);

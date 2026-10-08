@@ -172,7 +172,7 @@ export function MemoryHUD({ standalone = false }: MemoryHUDProps) {
       setSearchResults(res.results);
       setHasSearched(true);
       if (res.results.length > 0 && !selectedMemory) {
-        setSelectedMemory(res.results[0]);
+        setSelectedMemory(res.results[0] ?? null);
       }
     } catch (err) {
       setAlert({ text: `Search failed: ${String(err)}`, isError: true });
