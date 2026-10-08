@@ -13,9 +13,11 @@ from app.schemas.messages import (
     SystemStatusData,
     SystemStatusResponse,
 )
+from app.api.scheduler_routes import scheduler_router
 from app.tools.system_tool import SystemStatusTool
 
 router = APIRouter(prefix="/api", tags=["ryven"])
+router.include_router(scheduler_router)
 
 
 def get_assistant(request: Request) -> Assistant:

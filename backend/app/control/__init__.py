@@ -111,6 +111,65 @@ def __getattr__(name: str):
     ):
         import app.control.long_horizon as lh_mod
         return getattr(lh_mod, name)
+    if name in (
+        "TaskPriority",
+        "SchedulerState",
+        "ScheduledTask",
+        "ScheduledQueueItem",
+        "SchedulerStatus",
+        "MultiTaskScheduler",
+        "multi_task_scheduler",
+    ):
+        import app.control.scheduler as sched_mod
+        return getattr(sched_mod, name)
+    if name in (
+        "ResourceType",
+        "LockMode",
+        "ResourceKey",
+        "ResourceRequest",
+        "ResourceDescriptor",
+        "ResourceLease",
+        "ResourceOwner",
+        "ResourceState",
+        "ResourceAllocationStatus",
+        "LeaseState",
+        "ResourceSnapshot",
+        "ResourceManagerStatus",
+        "ResourceConflict",
+        "ResourceDecision",
+        "ResourceAcquisitionTimeoutError",
+        "TaskResourceManager",
+        "ResourceManager",
+        "resource_manager",
+        "CANONICAL_RESOURCE_ORDER",
+        "DEFAULT_RESOURCE_CAPACITIES",
+    ):
+        import app.control.resources as res_mod
+        return getattr(res_mod, name)
+    if name in (
+        "ConcurrencyState",
+        "PreemptionStatus",
+        "ExecutionSlot",
+        "ConcurrencyAdmissionDecision",
+        "PreemptionDecision",
+        "ConcurrencySnapshot",
+        "SafeConcurrencyController",
+        "concurrency_controller",
+    ):
+        import app.control.concurrency as conc_mod
+        return getattr(conc_mod, name)
+    if name in (
+        "RecoveryState",
+        "TaskRecoveryResult",
+        "RecoveryRunSummary",
+        "ShutdownReport",
+        "MultiTaskRecoveryManager",
+        "RecoveryManager",
+        "recovery_manager",
+        "multi_task_recovery_manager",
+    ):
+        import app.control.recovery as rec_mod
+        return getattr(rec_mod, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 __all__ = [
@@ -186,4 +245,42 @@ __all__ = [
     "TaskPersistenceRepository",
     "LongHorizonTaskManager",
     "long_horizon_task_manager",
+    "TaskPriority",
+    "SchedulerState",
+    "ScheduledTask",
+    "ScheduledQueueItem",
+    "SchedulerStatus",
+    "MultiTaskScheduler",
+    "multi_task_scheduler",
+    "ResourceType",
+    "LockMode",
+    "ResourceKey",
+    "ResourceRequest",
+    "ResourceLease",
+    "ResourceOwner",
+    "ResourceState",
+    "LeaseState",
+    "ResourceSnapshot",
+    "ResourceConflict",
+    "ResourceDecision",
+    "ResourceAcquisitionTimeoutError",
+    "TaskResourceManager",
+    "ResourceManager",
+    "resource_manager",
+    "ConcurrencyState",
+    "PreemptionStatus",
+    "ExecutionSlot",
+    "ConcurrencyAdmissionDecision",
+    "PreemptionDecision",
+    "ConcurrencySnapshot",
+    "SafeConcurrencyController",
+    "concurrency_controller",
+    "RecoveryState",
+    "TaskRecoveryResult",
+    "RecoveryRunSummary",
+    "ShutdownReport",
+    "MultiTaskRecoveryManager",
+    "RecoveryManager",
+    "recovery_manager",
+    "multi_task_recovery_manager",
 ]

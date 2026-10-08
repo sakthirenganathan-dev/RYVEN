@@ -163,7 +163,7 @@ class CheckpointStore:
 
     def save_checkpoint(
         self,
-        task_id: str,
+        task_id: Union[str, PersistedTaskCheckpoint],
         user_goal: str = "",
         project_name: str = "",
         task_type: str = "orchestration",
@@ -179,12 +179,31 @@ class CheckpointStore:
         safe_metadata: Optional[Dict[str, Any]] = None,
     ) -> PersistedTaskCheckpoint:
         """Persist a task checkpoint with recursive secret redaction."""
+        if isinstance(task_id, PersistedTaskCheckpoint):
+            chk_obj = task_id
+            task_id = chk_obj.task_id
+            user_goal = chk_obj.user_goal
+            project_name = chk_obj.project_name
+            task_type = chk_obj.task_type
+            current_state = chk_obj.current_state
+            current_step_id = chk_obj.current_step_id
+            completed_steps = chk_obj.completed_steps
+            pending_steps = chk_obj.pending_steps
+            step_details = chk_obj.step_details
+            retry_counts = chk_obj.retry_counts
+            recovery_status = chk_obj.recovery_status
+            safe_metadata = chk_obj.safe_metadata
+            workflow_id = chk_obj.workflow_id
+            schema_ver = chk_obj.schema_version
+        else:
+            schema_ver = self.CURRENT_SCHEMA_VERSION
+
         now = utc_now_iso()
         safe_meta = _redact_dict(metadata or safe_metadata or {})
         safe_step_details = [_redact_dict(s) for s in (step_details or [])]
 
         checkpoint = PersistedTaskCheckpoint(
-            schema_version=self.CURRENT_SCHEMA_VERSION,
+            schema_version=schema_ver,
             task_id=task_id,
             workflow_id=workflow_id,
             project_name=project_name,

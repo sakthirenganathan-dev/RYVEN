@@ -112,6 +112,7 @@ class LongHorizonTaskState(str, Enum):
     PENDING = "PENDING"
     PLANNING = "PLANNING"
     READY = "READY"
+    QUEUED = "QUEUED"
     RUNNING = "RUNNING"
     WAITING_CONFIRMATION = "WAITING_CONFIRMATION"
     WAITING_USER = "WAITING_USER"
@@ -119,6 +120,7 @@ class LongHorizonTaskState(str, Enum):
     RECOVERING = "RECOVERING"
     BLOCKED = "BLOCKED"
     INTERRUPTED = "INTERRUPTED"
+    RECOVERY_REQUIRED = "RECOVERY_REQUIRED"
     RESUMING = "RESUMING"
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
@@ -130,23 +132,34 @@ LEGAL_TASK_TRANSITIONS: Dict[LongHorizonTaskState, Set[LongHorizonTaskState]] = 
     LongHorizonTaskState.PENDING: {
         LongHorizonTaskState.PLANNING,
         LongHorizonTaskState.READY,
+        LongHorizonTaskState.QUEUED,
         LongHorizonTaskState.RUNNING,
         LongHorizonTaskState.CANCELLED,
         LongHorizonTaskState.FAILED,
     },
     LongHorizonTaskState.PLANNING: {
         LongHorizonTaskState.READY,
+        LongHorizonTaskState.QUEUED,
         LongHorizonTaskState.WAITING_CONFIRMATION,
         LongHorizonTaskState.PAUSED,
         LongHorizonTaskState.CANCELLED,
         LongHorizonTaskState.FAILED,
     },
     LongHorizonTaskState.READY: {
+        LongHorizonTaskState.QUEUED,
         LongHorizonTaskState.RUNNING,
         LongHorizonTaskState.RESUMING,
         LongHorizonTaskState.PAUSED,
         LongHorizonTaskState.CANCELLED,
         LongHorizonTaskState.FAILED,
+    },
+    LongHorizonTaskState.QUEUED: {
+        LongHorizonTaskState.RUNNING,
+        LongHorizonTaskState.PAUSED,
+        LongHorizonTaskState.CANCELLED,
+        LongHorizonTaskState.FAILED,
+        LongHorizonTaskState.READY,
+        LongHorizonTaskState.INTERRUPTED,
     },
     LongHorizonTaskState.RUNNING: {
         LongHorizonTaskState.WAITING_CONFIRMATION,
@@ -155,6 +168,7 @@ LEGAL_TASK_TRANSITIONS: Dict[LongHorizonTaskState, Set[LongHorizonTaskState]] = 
         LongHorizonTaskState.RECOVERING,
         LongHorizonTaskState.BLOCKED,
         LongHorizonTaskState.INTERRUPTED,
+        LongHorizonTaskState.RECOVERY_REQUIRED,
         LongHorizonTaskState.COMPLETED,
         LongHorizonTaskState.FAILED,
         LongHorizonTaskState.CANCELLED,
@@ -166,6 +180,7 @@ LEGAL_TASK_TRANSITIONS: Dict[LongHorizonTaskState, Set[LongHorizonTaskState]] = 
         LongHorizonTaskState.CANCELLED,
         LongHorizonTaskState.FAILED,
         LongHorizonTaskState.INTERRUPTED,
+        LongHorizonTaskState.RECOVERY_REQUIRED,
     },
     LongHorizonTaskState.WAITING_USER: {
         LongHorizonTaskState.RUNNING,
@@ -174,16 +189,21 @@ LEGAL_TASK_TRANSITIONS: Dict[LongHorizonTaskState, Set[LongHorizonTaskState]] = 
         LongHorizonTaskState.CANCELLED,
         LongHorizonTaskState.FAILED,
         LongHorizonTaskState.INTERRUPTED,
+        LongHorizonTaskState.RECOVERY_REQUIRED,
     },
     LongHorizonTaskState.PAUSED: {
         LongHorizonTaskState.RESUMING,
         LongHorizonTaskState.READY,
+        LongHorizonTaskState.QUEUED,
         LongHorizonTaskState.CANCELLED,
+        LongHorizonTaskState.INTERRUPTED,
+        LongHorizonTaskState.RECOVERY_REQUIRED,
     },
     LongHorizonTaskState.RECOVERING: {
         LongHorizonTaskState.RUNNING,
         LongHorizonTaskState.BLOCKED,
         LongHorizonTaskState.INTERRUPTED,
+        LongHorizonTaskState.RECOVERY_REQUIRED,
         LongHorizonTaskState.FAILED,
         LongHorizonTaskState.CANCELLED,
     },
@@ -192,25 +212,42 @@ LEGAL_TASK_TRANSITIONS: Dict[LongHorizonTaskState, Set[LongHorizonTaskState]] = 
         LongHorizonTaskState.RECOVERING,
         LongHorizonTaskState.PLANNING,
         LongHorizonTaskState.PAUSED,
-        LongHorizonTaskState.FAILED,
         LongHorizonTaskState.CANCELLED,
+        LongHorizonTaskState.FAILED,
+        LongHorizonTaskState.INTERRUPTED,
+        LongHorizonTaskState.RECOVERY_REQUIRED,
     },
     LongHorizonTaskState.INTERRUPTED: {
         LongHorizonTaskState.RESUMING,
+        LongHorizonTaskState.QUEUED,
+        LongHorizonTaskState.READY,
+        LongHorizonTaskState.PAUSED,
+        LongHorizonTaskState.RECOVERY_REQUIRED,
         LongHorizonTaskState.EXPIRED,
+        LongHorizonTaskState.FAILED,
+        LongHorizonTaskState.CANCELLED,
+    },
+    LongHorizonTaskState.RECOVERY_REQUIRED: {
+        LongHorizonTaskState.PLANNING,
+        LongHorizonTaskState.QUEUED,
+        LongHorizonTaskState.READY,
+        LongHorizonTaskState.PAUSED,
         LongHorizonTaskState.FAILED,
         LongHorizonTaskState.CANCELLED,
     },
     LongHorizonTaskState.RESUMING: {
         LongHorizonTaskState.RUNNING,
+        LongHorizonTaskState.QUEUED,
         LongHorizonTaskState.WAITING_CONFIRMATION,
         LongHorizonTaskState.RECOVERING,
         LongHorizonTaskState.BLOCKED,
+        LongHorizonTaskState.INTERRUPTED,
+        LongHorizonTaskState.RECOVERY_REQUIRED,
         LongHorizonTaskState.FAILED,
         LongHorizonTaskState.CANCELLED,
     },
     LongHorizonTaskState.COMPLETED: set(),
-    LongHorizonTaskState.FAILED: {LongHorizonTaskState.RESUMING, LongHorizonTaskState.PLANNING},  # eligible for retry
+    LongHorizonTaskState.FAILED: {LongHorizonTaskState.RESUMING, LongHorizonTaskState.PLANNING, LongHorizonTaskState.QUEUED},  # eligible for retry
     LongHorizonTaskState.CANCELLED: set(),
     LongHorizonTaskState.EXPIRED: set(),
 }
@@ -422,10 +459,11 @@ class TaskPersistenceRepository:
     """
 
     SCHEMA_VERSION = 1
+    M17_8_SCHEMA_VERSION = 2
 
     def __init__(self, db_path: Optional[str | Path] = None) -> None:
         self.db_path = db_path if db_path and str(db_path) == ":memory:" else (Path(db_path) if db_path else DEFAULT_DB_PATH)
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._mem_conn: Optional[sqlite3.Connection] = None
         self._init_db()
 
@@ -443,6 +481,12 @@ class TaskPersistenceRepository:
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(str(self.db_path), timeout=15.0)
         conn.row_factory = sqlite3.Row
+        try:
+            conn.execute("PRAGMA journal_mode=WAL;")
+            conn.execute("PRAGMA busy_timeout=15000;")
+            conn.execute("PRAGMA foreign_keys=ON;")
+        except Exception:
+            pass
         try:
             with conn:
                 yield conn
@@ -499,6 +543,16 @@ class TaskPersistenceRepository:
                     """
                 )
                 conn.commit()
+        # Perform Phase 4 schema upgrade idempotently
+        self.migrate_to_v2()
+
+    def save_task(self, task: LongHorizonTask) -> LongHorizonTask:
+        """Upsert a task into durable storage."""
+        with self._lock:
+            existing = self.get_task(task.task_id)
+            if existing:
+                return self.update_task(task)
+            return self.create_task(task)
 
     def create_task(self, task: LongHorizonTask) -> LongHorizonTask:
         """Insert a newly created task atomically."""
@@ -518,6 +572,7 @@ class TaskPersistenceRepository:
                 meta_to_save["_last_milestone"] = task.last_milestone
                 meta_to_save["_active_confirmation_token"] = task.active_confirmation_token
                 meta_to_save["_active_confirmation_action"] = task.active_confirmation_action
+                meta_to_save["_completed_step_ids"] = list(task.completed_step_ids)
 
                 cur.execute(
                     """
@@ -572,6 +627,7 @@ class TaskPersistenceRepository:
                 meta_to_save["_last_milestone"] = task.last_milestone
                 meta_to_save["_active_confirmation_token"] = task.active_confirmation_token
                 meta_to_save["_active_confirmation_action"] = task.active_confirmation_action
+                meta_to_save["_completed_step_ids"] = list(task.completed_step_ids)
 
                 cur.execute(
                     """
@@ -612,6 +668,13 @@ class TaskPersistenceRepository:
                 )
                 conn.commit()
                 return task
+
+    def save_task(self, task: LongHorizonTask) -> LongHorizonTask:
+        """Upsert a task record (creates if new, updates if exists)."""
+        existing = self.get_task(task.task_id)
+        if existing:
+            return self.update_task(task)
+        return self.create_task(task)
 
 
     def get_task(self, task_id: str) -> Optional[LongHorizonTask]:
@@ -715,11 +778,23 @@ class TaskPersistenceRepository:
         last_milestone = meta_raw.pop("_last_milestone", "Task initialized")
         active_conf_token = meta_raw.pop("_active_confirmation_token", None)
         active_conf_action = meta_raw.pop("_active_confirmation_action", None)
-
-        steps = [LongHorizonTaskStep(**s) for s in steps_raw]
+        steps = []
+        for s in steps_raw:
+            if isinstance(s, dict):
+                if "action" not in s or not s["action"]:
+                    s["action"] = s.get("name", "execute_step")
+                steps.append(LongHorizonTaskStep(**s))
+            elif isinstance(s, LongHorizonTaskStep):
+                steps.append(s)
         journal = [TaskExecutionJournalEntry(**j) for j in journal_raw]
 
-        completed_ids = [s.step_id for s in steps if s.status == LongHorizonTaskState.COMPLETED]
+        saved_completed_ids = meta_raw.pop("_completed_step_ids", None)
+        if saved_completed_ids is not None and len(saved_completed_ids) > 0:
+            completed_ids = list(saved_completed_ids)
+        else:
+            completed_ids = [s.step_id for s in steps if s.status == LongHorizonTaskState.COMPLETED]
+            if not completed_ids and "completed_steps" in row.keys() and row["completed_steps"] > 0:
+                completed_ids = [f"step-{i}" for i in range(row["completed_steps"])]
         pending_ids = [s.step_id for s in steps if s.status in (LongHorizonTaskState.PENDING, LongHorizonTaskState.READY)]
         failed_ids = [s.step_id for s in steps if s.status == LongHorizonTaskState.FAILED]
 
@@ -752,6 +827,463 @@ class TaskPersistenceRepository:
             completed_at=row["completed_at"],
             safe_metadata=meta_raw,
         )
+
+    # -----------------------------------------------------------------------
+    # Phase 4 Persistence Schema v2 & Multi-Task Scheduling Extensions
+    # -----------------------------------------------------------------------
+
+    def migrate_to_v2(self) -> int:
+        """Upgrade database schema to Version 2 (M17.8 Phase 4).
+        
+        Guaranteed transactional, idempotent, and non-destructive.
+        """
+        with self._lock:
+            with self._connection() as conn:
+                cur = conn.cursor()
+                # 1. App sessions table for unclean shutdown detection
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS app_sessions (
+                        session_id TEXT PRIMARY KEY,
+                        started_at TEXT NOT NULL,
+                        ended_at TEXT,
+                        status TEXT NOT NULL,
+                        clean_shutdown INTEGER NOT NULL DEFAULT 0,
+                        metadata_json TEXT NOT NULL DEFAULT '{}'
+                    )
+                    """
+                )
+                # 2. Scheduled tasks table
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS scheduled_tasks (
+                        task_id TEXT PRIMARY KEY,
+                        priority INTEGER NOT NULL DEFAULT 50,
+                        effective_priority REAL NOT NULL DEFAULT 50.0,
+                        state TEXT NOT NULL DEFAULT 'QUEUED',
+                        dependencies_json TEXT NOT NULL DEFAULT '[]',
+                        required_resources_json TEXT NOT NULL DEFAULT '[]',
+                        enqueued_at REAL NOT NULL,
+                        scheduled_at REAL,
+                        started_at REAL,
+                        paused_at REAL,
+                        completed_at REAL,
+                        preemption_count INTEGER NOT NULL DEFAULT 0,
+                        retry_count INTEGER NOT NULL DEFAULT 0,
+                        checkpoint_ref TEXT,
+                        recovery_state TEXT,
+                        interruption_reason TEXT,
+                        metadata_json TEXT NOT NULL DEFAULT '{}',
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL
+                    )
+                    """
+                )
+                # 3. Durable execution slots table
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS durable_execution_slots (
+                        slot_id TEXT PRIMARY KEY,
+                        task_id TEXT NOT NULL,
+                        started_at REAL NOT NULL,
+                        state TEXT NOT NULL,
+                        resources_json TEXT NOT NULL DEFAULT '[]',
+                        priority REAL NOT NULL DEFAULT 0.0,
+                        preemption_requested INTEGER NOT NULL DEFAULT 0,
+                        last_checkpoint_json TEXT,
+                        updated_at TEXT NOT NULL
+                    )
+                    """
+                )
+                # 4. Durable resource leases table
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS durable_resource_leases (
+                        lease_id TEXT PRIMARY KEY,
+                        task_id TEXT NOT NULL,
+                        resources_json TEXT NOT NULL DEFAULT '[]',
+                        acquired_at REAL NOT NULL,
+                        state TEXT NOT NULL DEFAULT 'ACTIVE',
+                        ttl_seconds REAL,
+                        updated_at TEXT NOT NULL
+                    )
+                    """
+                )
+                # 5. Recovery journal table
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS recovery_journal (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        recovery_run_id TEXT NOT NULL,
+                        task_id TEXT NOT NULL,
+                        action TEXT NOT NULL,
+                        previous_state TEXT,
+                        new_state TEXT,
+                        details_json TEXT NOT NULL DEFAULT '{}',
+                        created_at TEXT NOT NULL
+                    )
+                    """
+                )
+                # 6. Record schema version 2 in schema_meta
+                cur.execute(
+                    """
+                    INSERT INTO schema_meta (key, value) VALUES ('m17_8_schema_version', '2')
+                    ON CONFLICT(key) DO UPDATE SET value = '2'
+                    """
+                )
+                conn.commit()
+                return 2
+
+    def create_session(self, session_id: str, metadata: Optional[Dict[str, Any]] = None) -> str:
+        """Record a newly started application session."""
+        with self._lock:
+            with self._connection() as conn:
+                cur = conn.cursor()
+                now = _utc_now_iso()
+                meta_json = json.dumps(_scrub_secrets_recursive(metadata or {}))
+                cur.execute(
+                    """
+                    INSERT INTO app_sessions (session_id, started_at, status, clean_shutdown, metadata_json)
+                    VALUES (?, ?, 'ACTIVE', 0, ?)
+                    ON CONFLICT(session_id) DO UPDATE SET status = 'ACTIVE', clean_shutdown = 0
+                    """,
+                    (session_id, now, meta_json),
+                )
+                conn.commit()
+                return session_id
+
+    def get_last_session(self) -> Optional[Dict[str, Any]]:
+        """Fetch the most recent application session prior to the current run."""
+        with self._lock:
+            with self._connection() as conn:
+                cur = conn.cursor()
+                cur.execute("SELECT * FROM app_sessions ORDER BY started_at DESC LIMIT 1")
+                row = cur.fetchone()
+                if not row:
+                    return None
+                return dict(row)
+
+    def mark_clean_shutdown(self, session_id: str) -> bool:
+        """Mark an application session as gracefully and cleanly terminated."""
+        with self._lock:
+            with self._connection() as conn:
+                cur = conn.cursor()
+                now = _utc_now_iso()
+                cur.execute(
+                    """
+                    UPDATE app_sessions SET
+                        status = 'CLEAN',
+                        clean_shutdown = 1,
+                        ended_at = ?
+                    WHERE session_id = ?
+                    """,
+                    (now, session_id),
+                )
+                if cur.rowcount == 0:
+                    cur.execute(
+                        """
+                        INSERT INTO app_sessions (session_id, started_at, ended_at, status, clean_shutdown, metadata_json)
+                        VALUES (?, ?, ?, 'CLEAN', 1, '{}')
+                        ON CONFLICT(session_id) DO UPDATE SET
+                            status = 'CLEAN',
+                            clean_shutdown = 1,
+                            ended_at = excluded.ended_at
+                        """,
+                        (session_id, now, now),
+                    )
+                conn.commit()
+                return True
+
+    def save_scheduled_task(
+        self,
+        task_id: str,
+        priority: int = 50,
+        effective_priority: float = 50.0,
+        state: str = "QUEUED",
+        dependencies: Optional[List[str]] = None,
+        required_resources: Optional[List[str]] = None,
+        enqueued_at: Optional[float] = None,
+        scheduled_at: Optional[float] = None,
+        started_at: Optional[float] = None,
+        paused_at: Optional[float] = None,
+        completed_at: Optional[float] = None,
+        preemption_count: int = 0,
+        retry_count: int = 0,
+        checkpoint_ref: Optional[str] = None,
+        recovery_state: Optional[str] = None,
+        interruption_reason: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Persist or update scheduler queue metadata for a task."""
+        with self._lock:
+            with self._connection() as conn:
+                cur = conn.cursor()
+                now_iso = _utc_now_iso()
+                now_epoch = time.time()
+                cur.execute(
+                    """
+                    INSERT INTO scheduled_tasks (
+                        task_id, priority, effective_priority, state, dependencies_json,
+                        required_resources_json, enqueued_at, scheduled_at, started_at,
+                        paused_at, completed_at, preemption_count, retry_count, checkpoint_ref,
+                        recovery_state, interruption_reason, metadata_json, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(task_id) DO UPDATE SET
+                        priority = excluded.priority,
+                        effective_priority = excluded.effective_priority,
+                        state = excluded.state,
+                        dependencies_json = excluded.dependencies_json,
+                        required_resources_json = excluded.required_resources_json,
+                        preemption_count = excluded.preemption_count,
+                        retry_count = excluded.retry_count,
+                        checkpoint_ref = excluded.checkpoint_ref,
+                        recovery_state = excluded.recovery_state,
+                        interruption_reason = excluded.interruption_reason,
+                        metadata_json = excluded.metadata_json,
+                        updated_at = excluded.updated_at
+                    """,
+                    (
+                        task_id,
+                        priority,
+                        effective_priority,
+                        state,
+                        json.dumps(dependencies or []),
+                        json.dumps(required_resources or []),
+                        enqueued_at if enqueued_at is not None else now_epoch,
+                        scheduled_at,
+                        started_at,
+                        paused_at,
+                        completed_at,
+                        preemption_count,
+                        retry_count,
+                        checkpoint_ref,
+                        recovery_state,
+                        interruption_reason,
+                        json.dumps(_scrub_secrets_recursive(metadata or {})),
+                        now_iso,
+                        now_iso,
+                    ),
+                )
+                conn.commit()
+
+    def get_scheduled_task(self, task_id: str) -> Optional[Dict[str, Any]]:
+        """Fetch persisted scheduled task metadata."""
+        with self._lock:
+            with self._connection() as conn:
+                cur = conn.cursor()
+                cur.execute("SELECT * FROM scheduled_tasks WHERE task_id = ?", (task_id,))
+                row = cur.fetchone()
+                if not row:
+                    return None
+                data = dict(row)
+                data["dependencies"] = json.loads(data["dependencies_json"]) if data.get("dependencies_json") else []
+                data["required_resources"] = json.loads(data["required_resources_json"]) if data.get("required_resources_json") else []
+                data["metadata"] = json.loads(data["metadata_json"]) if data.get("metadata_json") else {}
+                return data
+
+    def list_scheduled_tasks(self, state: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Fetch all scheduled tasks matching criteria."""
+        with self._lock:
+            with self._connection() as conn:
+                cur = conn.cursor()
+                if state:
+                    cur.execute("SELECT * FROM scheduled_tasks WHERE state = ? ORDER BY enqueued_at ASC", (state,))
+                else:
+                    cur.execute("SELECT * FROM scheduled_tasks ORDER BY enqueued_at ASC")
+                rows = cur.fetchall()
+                out = []
+                for r in rows:
+                    d = dict(r)
+                    d["dependencies"] = json.loads(d["dependencies_json"]) if d.get("dependencies_json") else []
+                    d["required_resources"] = json.loads(d["required_resources_json"]) if d.get("required_resources_json") else []
+                    d["metadata"] = json.loads(d["metadata_json"]) if d.get("metadata_json") else {}
+                    out.append(d)
+                return out
+
+    def delete_scheduled_task(self, task_id: str) -> bool:
+        """Remove scheduled task record."""
+        with self._lock:
+            with self._connection() as conn:
+                cur = conn.cursor()
+                cur.execute("DELETE FROM scheduled_tasks WHERE task_id = ?", (task_id,))
+                conn.commit()
+                return cur.rowcount > 0
+
+    def save_durable_slot(
+        self,
+        slot_id: str,
+        task_id: str,
+        started_at: float,
+        state: str,
+        resources: Optional[List[Any]] = None,
+        priority: float = 0.0,
+        preemption_requested: bool = False,
+        last_checkpoint: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Persist active execution slot for crash detection."""
+        with self._lock:
+            with self._connection() as conn:
+                cur = conn.cursor()
+                now_iso = _utc_now_iso()
+                res_clean = [getattr(r, "canonical_string", str(r)) for r in (resources or [])]
+                cp_clean = json.dumps(_scrub_secrets_recursive(last_checkpoint or {}))
+                cur.execute(
+                    """
+                    INSERT INTO durable_execution_slots (
+                        slot_id, task_id, started_at, state, resources_json,
+                        priority, preemption_requested, last_checkpoint_json, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(slot_id) DO UPDATE SET
+                        state = excluded.state,
+                        priority = excluded.priority,
+                        preemption_requested = excluded.preemption_requested,
+                        last_checkpoint_json = excluded.last_checkpoint_json,
+                        updated_at = excluded.updated_at
+                    """,
+                    (
+                        slot_id,
+                        task_id,
+                        started_at,
+                        state,
+                        json.dumps(res_clean),
+                        priority,
+                        1 if preemption_requested else 0,
+                        cp_clean,
+                        now_iso,
+                    ),
+                )
+                conn.commit()
+
+    def list_durable_slots(self) -> List[Dict[str, Any]]:
+        """List all durable execution slots."""
+        with self._lock:
+            with self._connection() as conn:
+                cur = conn.cursor()
+                cur.execute("SELECT * FROM durable_execution_slots")
+                rows = cur.fetchall()
+                out = []
+                for r in rows:
+                    d = dict(r)
+                    d["resources"] = json.loads(d["resources_json"]) if d.get("resources_json") else []
+                    d["last_checkpoint"] = json.loads(d["last_checkpoint_json"]) if d.get("last_checkpoint_json") else {}
+                    out.append(d)
+                return out
+
+    def clear_durable_slots(self) -> int:
+        """Clear all durable slots upon crash recovery."""
+        with self._lock:
+            with self._connection() as conn:
+                cur = conn.cursor()
+                cur.execute("DELETE FROM durable_execution_slots")
+                conn.commit()
+                return cur.rowcount
+
+    def save_durable_lease(
+        self,
+        lease_id: str,
+        task_id: str,
+        resources: Optional[List[Any]] = None,
+        acquired_at: Optional[float] = None,
+        state: str = "ACTIVE",
+        ttl_seconds: Optional[float] = None,
+    ) -> None:
+        """Persist resource lease for crash reconciliation."""
+        with self._lock:
+            with self._connection() as conn:
+                cur = conn.cursor()
+                now_iso = _utc_now_iso()
+                res_clean = [getattr(r, "canonical_string", str(r)) for r in (resources or [])]
+                cur.execute(
+                    """
+                    INSERT INTO durable_resource_leases (
+                        lease_id, task_id, resources_json, acquired_at, state, ttl_seconds, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(lease_id) DO UPDATE SET
+                        state = excluded.state,
+                        updated_at = excluded.updated_at
+                    """,
+                    (
+                        lease_id,
+                        task_id,
+                        json.dumps(res_clean),
+                        acquired_at if acquired_at is not None else time.time(),
+                        state,
+                        ttl_seconds,
+                        now_iso,
+                    ),
+                )
+                conn.commit()
+
+    def list_durable_leases(self) -> List[Dict[str, Any]]:
+        """List all durable resource leases."""
+        with self._lock:
+            with self._connection() as conn:
+                cur = conn.cursor()
+                cur.execute("SELECT * FROM durable_resource_leases")
+                rows = cur.fetchall()
+                out = []
+                for r in rows:
+                    d = dict(r)
+                    d["resources"] = json.loads(d["resources_json"]) if d.get("resources_json") else []
+                    out.append(d)
+                return out
+
+    def clear_durable_leases(self) -> int:
+        """Clear all durable leases upon crash reconciliation."""
+        with self._lock:
+            with self._connection() as conn:
+                cur = conn.cursor()
+                cur.execute("DELETE FROM durable_resource_leases")
+                conn.commit()
+                return cur.rowcount
+
+    def log_recovery_event(
+        self,
+        recovery_run_id: str,
+        task_id: str,
+        action: str,
+        previous_state: Optional[str] = None,
+        new_state: Optional[str] = None,
+        details: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Record an entry in the recovery audit journal."""
+        with self._lock:
+            with self._connection() as conn:
+                cur = conn.cursor()
+                cur.execute(
+                    """
+                    INSERT INTO recovery_journal (
+                        recovery_run_id, task_id, action, previous_state, new_state, details_json, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        recovery_run_id,
+                        task_id,
+                        action,
+                        previous_state,
+                        new_state,
+                        json.dumps(_scrub_secrets_recursive(details or {})),
+                        _utc_now_iso(),
+                    ),
+                )
+                conn.commit()
+
+    def get_recovery_events(self, task_id: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Fetch audit entries from recovery journal."""
+        with self._lock:
+            with self._connection() as conn:
+                cur = conn.cursor()
+                if task_id:
+                    cur.execute("SELECT * FROM recovery_journal WHERE task_id = ? ORDER BY id ASC", (task_id,))
+                else:
+                    cur.execute("SELECT * FROM recovery_journal ORDER BY id ASC")
+                rows = cur.fetchall()
+                out = []
+                for r in rows:
+                    d = dict(r)
+                    d["details"] = json.loads(d["details_json"]) if d.get("details_json") else {}
+                    out.append(d)
+                return out
 
 
 

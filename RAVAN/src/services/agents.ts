@@ -368,3 +368,198 @@ export async function cancelLongTask(taskId: string, reason: string = "User canc
   if (!res.ok) throw new Error(`Failed to cancel task: ${res.status}`);
   return res.json();
 }
+
+// ---------------------------------------------------------------------------
+// M17.8 Multi-Task Scheduler Types & Service API
+// ---------------------------------------------------------------------------
+
+export interface SchedulerResourceSummary {
+  total_resources?: number;
+  occupied_resources: number;
+  available_resources?: number;
+  active_leases: number;
+  waiting_tasks?: number;
+}
+
+export interface SchedulerStatusData {
+  scheduler_state: string;
+  running_task_count: number;
+  queued_task_count: number;
+  paused_task_count: number;
+  blocked_task_count: number;
+  recovery_required_count: number;
+  active_execution_slots: number;
+  max_concurrency: number;
+  resource_usage_summary: SchedulerResourceSummary;
+  preemption_count: number;
+  uptime_seconds: number;
+}
+
+export interface QueuedTaskItem {
+  task_id: string;
+  goal?: string;
+  summary?: string;
+  state: string;
+  priority: number;
+  effective_priority: number;
+  wait_bonus?: number;
+  enqueue_time?: number;
+  enqueued_at?: number;
+  enqueue_time_iso?: string;
+  enqueued_at_iso?: string;
+  dependencies: string[];
+  requested_resources: string[];
+  retry_count: number;
+  preemption_count: number;
+  recovery_count: number;
+  blocked_reason?: string | null;
+  blocked_resources?: string[];
+  progress?: number;
+}
+
+export interface ResourceItemData {
+  resource_type: string;
+  capacity: number;
+  active_usage: number;
+  available_capacity: number;
+  safe_owner_task_ids: string[];
+  blocked_tasks: string[];
+  conflicts: Array<{
+    resource?: string;
+    requested_by?: string;
+    owned_by?: string;
+    reason?: string;
+  }>;
+}
+
+export interface SchedulerResourcesData {
+  resources: ResourceItemData[];
+  total_capacity: number;
+  total_active_usage: number;
+  total_available: number;
+  active_leases_count: number;
+}
+
+export interface SchedulerTaskDetail {
+  task_id: string;
+  goal?: string;
+  summary?: string;
+  state: string;
+  priority: number;
+  effective_priority: number;
+  progress: number;
+  dependencies: string[];
+  resources: string[];
+  retry_count: number;
+  preemption_count: number;
+  recovery_state?: string | null;
+  recovery_attempts?: number;
+  checkpoint_available?: boolean;
+  checkpoint_availability?: boolean;
+  last_milestone?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface TaskProgressData {
+  task_id: string;
+  progress_percent: number;
+  current_step_index: number;
+  total_steps: number;
+  completed_steps: number;
+  state: string;
+}
+
+export async function getSchedulerStatus(): Promise<SchedulerStatusData> {
+  const res = await fetch(`${RYVEN_API_BASE_URL}/api/scheduler/status`);
+  if (!res.ok) throw new Error(`Failed to fetch scheduler status: ${res.status}`);
+  return res.json();
+}
+
+export async function getSchedulerQueue(): Promise<QueuedTaskItem[]> {
+  const res = await fetch(`${RYVEN_API_BASE_URL}/api/scheduler/queue`);
+  if (!res.ok) throw new Error(`Failed to fetch scheduler queue: ${res.status}`);
+  const data = await res.json();
+  if (Array.isArray(data)) return data;
+  if (data && Array.isArray(data.queue)) return data.queue;
+  return [];
+}
+
+export async function getSchedulerResources(): Promise<SchedulerResourcesData> {
+  const res = await fetch(`${RYVEN_API_BASE_URL}/api/scheduler/resources`);
+  if (!res.ok) throw new Error(`Failed to fetch scheduler resources: ${res.status}`);
+  const data = await res.json();
+  const list: ResourceItemData[] = Array.isArray(data) ? data : (data.resources || []);
+  return {
+    resources: list,
+    total_capacity: list.reduce((acc, r) => acc + (r.capacity || 0), 0),
+    total_active_usage: list.reduce((acc, r) => acc + (r.active_usage || 0), 0),
+    total_available: list.reduce((acc, r) => acc + (r.available_capacity || 0), 0),
+    active_leases_count: data.occupied_count || list.filter((r) => r.active_usage > 0).length,
+  };
+}
+
+export async function getTask(taskId: string): Promise<SchedulerTaskDetail> {
+  const res = await fetch(`${RYVEN_API_BASE_URL}/api/scheduler/tasks/${encodeURIComponent(taskId)}`);
+  if (!res.ok) throw new Error(`Failed to fetch task '${taskId}': ${res.status}`);
+  return res.json();
+}
+
+export async function getTaskProgress(taskId: string): Promise<TaskProgressData> {
+  const res = await fetch(`${RYVEN_API_BASE_URL}/api/scheduler/tasks/${encodeURIComponent(taskId)}/progress`);
+  if (!res.ok) throw new Error(`Failed to fetch progress for task '${taskId}': ${res.status}`);
+  return res.json();
+}
+
+export async function pauseTask(taskId: string, reason?: string): Promise<{ status: string; task_id: string; message: string }> {
+  const res = await fetch(`${RYVEN_API_BASE_URL}/api/scheduler/tasks/${encodeURIComponent(taskId)}/pause`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ reason }),
+  });
+  if (!res.ok) throw new Error(`Failed to pause task: ${res.status}`);
+  return res.json();
+}
+
+export async function resumeTask(taskId: string, reason?: string): Promise<{ status: string; task_id: string; message: string }> {
+  const res = await fetch(`${RYVEN_API_BASE_URL}/api/scheduler/tasks/${encodeURIComponent(taskId)}/resume`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ reason }),
+  });
+  if (!res.ok) throw new Error(`Failed to resume task: ${res.status}`);
+  return res.json();
+}
+
+export async function cancelTask(taskId: string, reason?: string): Promise<{ status: string; task_id: string; message: string }> {
+  const res = await fetch(`${RYVEN_API_BASE_URL}/api/scheduler/tasks/${encodeURIComponent(taskId)}/cancel`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ reason }),
+  });
+  if (!res.ok) throw new Error(`Failed to cancel task: ${res.status}`);
+  return res.json();
+}
+
+export async function retryTask(taskId: string, reason?: string): Promise<{ status: string; task_id: string; message: string }> {
+  const res = await fetch(`${RYVEN_API_BASE_URL}/api/scheduler/tasks/${encodeURIComponent(taskId)}/retry`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ reason }),
+  });
+  if (!res.ok) throw new Error(`Failed to retry task: ${res.status}`);
+  return res.json();
+}
+
+export async function updateTaskPriority(
+  taskId: string,
+  priority: number | string,
+): Promise<{ status: string; task_id: string; priority: number; effective_priority: number }> {
+  const res = await fetch(`${RYVEN_API_BASE_URL}/api/scheduler/tasks/${encodeURIComponent(taskId)}/priority`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ priority }),
+  });
+  if (!res.ok) throw new Error(`Failed to update priority for task '${taskId}': ${res.status}`);
+  return res.json();
+}

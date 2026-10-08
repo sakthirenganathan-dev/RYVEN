@@ -87,6 +87,15 @@ class ActionEventBus:
             loop.create_task(self.publish(event))
         except RuntimeError:
             self._history.append(event)
+            # Outside asyncio event loop: notify synchronous subscribers directly
+            for sid, fn in list(self._subscribers.items()):
+                try:
+                    if hasattr(fn, "__sync_fn__"):
+                        fn.__sync_fn__(event)
+                    elif not inspect.iscoroutinefunction(fn):
+                        fn(event)
+                except Exception as exc:
+                    logger.debug(f"[ACTION_BUS] Sync subscriber '{sid}' error: {exc}")
 
     # -----------------------------------------------------------------------
     # Subscription management
@@ -106,6 +115,7 @@ class ActionEventBus:
             # Wrap sync callable so it satisfies the async subscriber interface
             async def _sync_wrapper(evt: "ActionEvent", _fn: Callable = fn) -> None:
                 _fn(evt)
+            _sync_wrapper.__sync_fn__ = fn
             self._subscribers[sid] = _sync_wrapper
         logger.debug(f"[ACTION_BUS] New subscriber: {sid} (total={len(self._subscribers)})")
         return sid

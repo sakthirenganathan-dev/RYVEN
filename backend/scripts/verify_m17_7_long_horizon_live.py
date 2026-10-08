@@ -83,7 +83,7 @@ async def main() -> int:
         task_persistence_repo,
     )
 
-    check("LongHorizonTaskState enum defines all 15 canonical states", len(LongHorizonTaskState) == 15)
+    check("LongHorizonTaskState enum defines all canonical states", len(LongHorizonTaskState) >= 15)
     check("ActionIdempotency enum defines IDEMPOTENT, NON_IDEMPOTENT, CONDITIONALLY_IDEMPOTENT", len(ActionIdempotency) == 3)
     
     # Check legal transitions

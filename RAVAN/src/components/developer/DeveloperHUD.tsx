@@ -9,10 +9,11 @@ import { ModelStatusPanel } from "@/components/developer/ModelStatusPanel";
 import { RuntimePanel } from "@/components/developer/RuntimePanel";
 import { SwarmPanel } from "@/components/developer/SwarmPanel";
 import { ControlPlanePanel } from "@/components/developer/ControlPlanePanel";
+import { MultiTaskSchedulerHUD } from "@/components/MultiTaskSchedulerHUD";
 
 const tone = { RUNNING: "signal", READY: "holo", BUILDING: "violet" } as const;
 
-type DeveloperView = "projects" | "activity" | "browser" | "control" | "agent" | "models" | "runtime" | "swarm";
+type DeveloperView = "projects" | "activity" | "browser" | "control" | "agent" | "models" | "runtime" | "swarm" | "scheduler";
 
 export function DeveloperHUD() {
   const [view, setView] = useState<DeveloperView>("projects");
@@ -118,6 +119,18 @@ export function DeveloperHUD() {
           >
             SWARM
           </button>
+          <button
+            type="button"
+            onClick={() => setView("scheduler")}
+            className={`px-2 py-0.5 text-[9px] rounded transition-colors tracking-widest ${
+              view === "scheduler"
+                ? "bg-holo/20 text-holo border border-holo/40"
+                : "text-muted-foreground hover:text-foreground"
+            }`}
+            style={{ fontFamily: "var(--font-mono)" }}
+          >
+            SCHEDULER
+          </button>
         </div>
 
         {/* Projects view */}
@@ -194,6 +207,9 @@ export function DeveloperHUD() {
 
         {/* M16.0 Multi-Agent Swarm view */}
         {view === "swarm" && <SwarmPanel />}
+
+        {/* M17.8 Multi-Task Scheduler view */}
+        {view === "scheduler" && <MultiTaskSchedulerHUD />}
       </div>
     </HUDPanel>
   );

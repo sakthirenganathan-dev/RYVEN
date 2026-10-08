@@ -215,6 +215,8 @@ class ObservedComputerState(BaseModel):
     expected_state: Optional[Dict[str, Any]] = None
     current_state: Optional[Dict[str, Any]] = None
     failure_recovery_context: Dict[str, Any] = Field(default_factory=dict)
+    anomaly_detected: bool = False
+    anomaly_description: Optional[str] = None
     safe_metadata: Dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="after")
@@ -443,6 +445,16 @@ class AdaptiveComputerUseController:
     # -----------------------------------------------------------------------
     # Environment State Observation
     # -----------------------------------------------------------------------
+
+    def observe_state(
+        self,
+        target_app: Optional[str] = None,
+        relevant_targets: Optional[List[str]] = None,
+        session_id: Optional[str] = None,
+        task_id: Optional[str] = None,
+    ) -> Optional[ObservedComputerState]:
+        """Synchronous observation hook for recovery validation and drift checks."""
+        return None
 
     async def observe_environment(
         self,

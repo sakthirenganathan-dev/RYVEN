@@ -42,6 +42,8 @@ def create_app() -> FastAPI:
 
     # Register API routers
     application.include_router(router)
+    from app.api.scheduler_routes import scheduler_router
+    application.include_router(scheduler_router)
 
     @application.get("/", tags=["root"])
     async def root() -> dict:
