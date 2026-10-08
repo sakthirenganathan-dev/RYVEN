@@ -563,3 +563,201 @@ export async function updateTaskPriority(
   if (!res.ok) throw new Error(`Failed to update priority for task '${taskId}': ${res.status}`);
   return res.json();
 }
+
+// ============================================================
+// M17.9 PERSISTENT MEMORY & USER MEMORY MANAGEMENT REST API
+// ============================================================
+
+export interface MemoryItem {
+  memory_id: string;
+  memory_type: string;
+  source: string;
+  project_id?: string | null;
+  task_id?: string | null;
+  trust_level: string;
+  taint_status?: string | null;
+  content: string;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface MemorySearchResult {
+  query: string;
+  total_found: number;
+  results: MemoryItem[];
+}
+
+export interface UserPreference {
+  key: string;
+  value: string;
+  project_id?: string | null;
+  updated_at?: string | null;
+}
+
+export interface UserPreferencesList {
+  project_id?: string | null;
+  count: number;
+  preferences: UserPreference[];
+}
+
+export interface MemoryDeleteResult {
+  deleted: boolean;
+  count: number;
+  target: string;
+}
+
+export interface MemoryExportResult {
+  exported_at: string;
+  total_exported: number;
+  memories: MemoryItem[];
+}
+
+export interface MemoryStats {
+  total_memories: number;
+  semantic_count: number;
+  episodic_count: number;
+  preference_count: number;
+  project_scoped_count: number;
+  global_count: number;
+  project_id?: string | null;
+}
+
+export async function searchMemories(
+  query: string,
+  projectId?: string,
+  memoryType?: string,
+  limit: number = 5
+): Promise<MemorySearchResult> {
+  const params = new URLSearchParams();
+  if (query) params.set("q", query);
+  if (projectId) params.set("project_id", projectId);
+  if (memoryType && memoryType !== "ALL") params.set("memory_type", memoryType);
+  params.set("limit", String(Math.min(limit, 5)));
+
+  const res = await fetch(`${RYVEN_API_BASE_URL}/api/memory/search?${params.toString()}`);
+  if (!res.ok) {
+    const errorBody = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(errorBody.detail || `Search failed with status: ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function getMemory(memoryId: string): Promise<MemoryItem> {
+  const res = await fetch(`${RYVEN_API_BASE_URL}/api/memory/${encodeURIComponent(memoryId)}`);
+  if (!res.ok) {
+    const errorBody = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(errorBody.detail || `Failed to fetch memory: ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function getPreferences(projectId?: string): Promise<UserPreferencesList> {
+  const params = new URLSearchParams();
+  if (projectId) params.set("project_id", projectId);
+  const queryStr = params.toString() ? `?${params.toString()}` : "";
+  const res = await fetch(`${RYVEN_API_BASE_URL}/api/memory/preferences${queryStr}`);
+  if (!res.ok) {
+    const errorBody = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(errorBody.detail || `Failed to fetch preferences: ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function savePreference(
+  key: string,
+  value: string,
+  projectId?: string
+): Promise<UserPreference> {
+  const res = await fetch(`${RYVEN_API_BASE_URL}/api/memory/preferences`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ key, value, project_id: projectId || null }),
+  });
+  if (!res.ok) {
+    const errorBody = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(errorBody.detail || `Failed to save preference: ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function deletePreference(key: string, projectId?: string): Promise<MemoryDeleteResult> {
+  const params = new URLSearchParams();
+  if (projectId) params.set("project_id", projectId);
+  const queryStr = params.toString() ? `?${params.toString()}` : "";
+  const res = await fetch(`${RYVEN_API_BASE_URL}/api/memory/preferences/${encodeURIComponent(key)}${queryStr}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) {
+    const errorBody = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(errorBody.detail || `Failed to delete preference: ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function deleteMemory(memoryId: string): Promise<MemoryDeleteResult> {
+  const res = await fetch(`${RYVEN_API_BASE_URL}/api/memory/${encodeURIComponent(memoryId)}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) {
+    const errorBody = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(errorBody.detail || `Failed to delete memory: ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function deleteTaskMemories(taskId: string): Promise<MemoryDeleteResult> {
+  const res = await fetch(`${RYVEN_API_BASE_URL}/api/memory/task/${encodeURIComponent(taskId)}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) {
+    const errorBody = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(errorBody.detail || `Failed to delete task memories: ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function deleteProjectMemories(
+  projectId: string,
+  confirmationToken?: string
+): Promise<MemoryDeleteResult> {
+  const headers: Record<string, string> = {};
+  if (confirmationToken) {
+    headers["X-Confirmation-Token"] = confirmationToken;
+  }
+  const res = await fetch(`${RYVEN_API_BASE_URL}/api/memory/project/${encodeURIComponent(projectId)}`, {
+    method: "DELETE",
+    headers,
+  });
+  if (!res.ok) {
+    const errorBody = await res.json().catch(() => ({ detail: res.statusText }));
+    const error = new Error(errorBody.detail || `Failed to delete project memories: ${res.status}`) as Error & { status?: number };
+    error.status = res.status;
+    throw error;
+  }
+  return res.json();
+}
+
+export async function exportMemories(projectId?: string, limit: number = 100): Promise<MemoryExportResult> {
+  const params = new URLSearchParams();
+  if (projectId) params.set("project_id", projectId);
+  params.set("limit", String(Math.min(limit, 100)));
+
+  const res = await fetch(`${RYVEN_API_BASE_URL}/api/memory/export?${params.toString()}`);
+  if (!res.ok) {
+    const errorBody = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(errorBody.detail || `Failed to export memories: ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function getMemoryStats(projectId?: string): Promise<MemoryStats> {
+  const params = new URLSearchParams();
+  if (projectId) params.set("project_id", projectId);
+  const queryStr = params.toString() ? `?${params.toString()}` : "";
+  const res = await fetch(`${RYVEN_API_BASE_URL}/api/memory/stats${queryStr}`);
+  if (!res.ok) {
+    const errorBody = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(errorBody.detail || `Failed to fetch memory stats: ${res.status}`);
+  }
+  return res.json();
+}

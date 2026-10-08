@@ -10,10 +10,11 @@ import { RuntimePanel } from "@/components/developer/RuntimePanel";
 import { SwarmPanel } from "@/components/developer/SwarmPanel";
 import { ControlPlanePanel } from "@/components/developer/ControlPlanePanel";
 import { MultiTaskSchedulerHUD } from "@/components/MultiTaskSchedulerHUD";
+import { MemoryHUD } from "@/components/MemoryHUD";
 
 const tone = { RUNNING: "signal", READY: "holo", BUILDING: "violet" } as const;
 
-type DeveloperView = "projects" | "activity" | "browser" | "control" | "agent" | "models" | "runtime" | "swarm" | "scheduler";
+type DeveloperView = "projects" | "activity" | "browser" | "control" | "agent" | "models" | "runtime" | "swarm" | "scheduler" | "memory";
 
 export function DeveloperHUD() {
   const [view, setView] = useState<DeveloperView>("projects");
@@ -131,6 +132,18 @@ export function DeveloperHUD() {
           >
             SCHEDULER
           </button>
+          <button
+            type="button"
+            onClick={() => setView("memory")}
+            className={`px-2 py-0.5 text-[9px] rounded transition-colors tracking-widest ${
+              view === "memory"
+                ? "bg-holo/20 text-holo border border-holo/40"
+                : "text-muted-foreground hover:text-foreground"
+            }`}
+            style={{ fontFamily: "var(--font-mono)" }}
+          >
+            MEMORY
+          </button>
         </div>
 
         {/* Projects view */}
@@ -210,6 +223,9 @@ export function DeveloperHUD() {
 
         {/* M17.8 Multi-Task Scheduler view */}
         {view === "scheduler" && <MultiTaskSchedulerHUD />}
+
+        {/* M17.9 Persistent Memory view */}
+        {view === "memory" && <MemoryHUD />}
       </div>
     </HUDPanel>
   );
