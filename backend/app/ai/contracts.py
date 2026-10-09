@@ -8,8 +8,9 @@ from __future__ import annotations
 
 import re
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional, Union
-from pydantic import BaseModel, Field
+from enum import Enum
+from typing import Any, AsyncIterator, Dict, List, Optional, Tuple, Union
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.ai.models import ModelProvider, TaskType
 from app.ai.provider import ChatMessage
@@ -91,6 +92,150 @@ def sanitize_dict(data: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         else:
             sanitized[k] = v
     return sanitized
+
+
+class StreamChunkSanitizer:
+    """Incremental bounded stream sanitizer preventing secret leakage and stripping
+    <think> internal reasoning blocks across chunk boundaries.
+    """
+
+    MAX_TAIL_CHARS: int = 128
+    _THINK_OPEN: str = "<think>"
+    _THINK_CLOSE: str = "</think>"
+
+    # Trigger prefixes that could begin a credential or confirmation token
+    _TRIGGER_PREFIXES = (
+        "bearer",
+        "xai-",
+        "hf_",
+        "sk-",
+        "confirmation_token",
+        "confirm_token",
+        "api_key",
+        "api-key",
+        "password",
+        "secret",
+        "authorization",
+        "cookie",
+        "token",
+    )
+
+    def __init__(self) -> None:
+        self.in_think: bool = False
+        self.buffer: str = ""
+
+    def feed(self, chunk: str) -> str:
+        """Process an incremental chunk and return safe text ready for emission."""
+        if not chunk:
+            return ""
+
+        text = self.buffer + chunk
+        self.buffer = ""
+        emitted_parts: List[str] = []
+
+        while text:
+            if self.in_think:
+                lower_text = text.lower()
+                close_idx = lower_text.find(self._THINK_CLOSE)
+                if close_idx != -1:
+                    # Found </think>: discard content up to </think>
+                    text = text[close_idx + len(self._THINK_CLOSE):]
+                    self.in_think = False
+                    continue
+                else:
+                    # Check if text ends with a partial prefix of </think>
+                    partial_len = 0
+                    for k in range(1, len(self._THINK_CLOSE)):
+                        if lower_text.endswith(self._THINK_CLOSE[:k]):
+                            partial_len = k
+                            break
+                    if partial_len > 0:
+                        self.buffer = text[-partial_len:]
+                    text = ""
+                    break
+            else:
+                lower_text = text.lower()
+                open_idx = lower_text.find(self._THINK_OPEN)
+                if open_idx != -1:
+                    # Found <think>: text before it is potential candidate for emission
+                    safe_candidate = text[:open_idx]
+                    text = text[open_idx + len(self._THINK_OPEN):]
+                    self.in_think = True
+                    if safe_candidate:
+                        safe_emitted, held = self._split_sensitive_tail(safe_candidate)
+                        if safe_emitted:
+                            emitted_parts.append(redact_secrets(safe_emitted))
+                        self.buffer = held + self.buffer
+                    continue
+                else:
+                    # No <think> found in text. Check if text ends with a partial prefix of <think>
+                    partial_len = 0
+                    for k in range(1, len(self._THINK_OPEN)):
+                        if lower_text.endswith(self._THINK_OPEN[:k]):
+                            partial_len = k
+                            break
+
+                    if partial_len > 0:
+                        candidate = text[:-partial_len]
+                        pending_prefix = text[-partial_len:]
+                        safe_emitted, held = self._split_sensitive_tail(candidate)
+                        if safe_emitted:
+                            emitted_parts.append(redact_secrets(safe_emitted))
+                        self.buffer = held + pending_prefix
+                    else:
+                        safe_emitted, held = self._split_sensitive_tail(text)
+                        if safe_emitted:
+                            emitted_parts.append(redact_secrets(safe_emitted))
+                        self.buffer = held
+
+                    text = ""
+                    break
+
+        return "".join(emitted_parts)
+
+    def _split_sensitive_tail(self, text: str) -> Tuple[str, str]:
+        """Split text into (safe_prefix, sensitive_tail_to_hold)."""
+        if not text:
+            return "", ""
+
+        lower = text.lower()
+        tail_inspect_len = min(len(text), self.MAX_TAIL_CHARS)
+        tail_slice = lower[-tail_inspect_len:]
+
+        hold_idx = -1
+        # Search for trigger words or prefixes in tail slice
+        for trig in self._TRIGGER_PREFIXES:
+            # Check if tail ends with a prefix of trig (at least 3 chars)
+            for k in range(3, len(trig) + 1):
+                if tail_slice.endswith(trig[:k]):
+                    cand_idx = len(text) - k
+                    if hold_idx == -1 or cand_idx < hold_idx:
+                        hold_idx = cand_idx
+                    break
+
+            # Check if trig appears in tail slice followed by potential token chars
+            pos = tail_slice.rfind(trig)
+            if pos != -1:
+                cand_idx = len(text) - len(tail_slice) + pos
+                after_trig = text[cand_idx + len(trig):]
+                # If after_trig is short (value in progress) and doesn't have closing delimiter
+                if len(after_trig) <= 64 and not re.search(r"[\s,;'\"]\S+", after_trig):
+                    if hold_idx == -1 or cand_idx < hold_idx:
+                        hold_idx = cand_idx
+
+        if hold_idx != -1 and hold_idx < len(text):
+            return text[:hold_idx], text[hold_idx:]
+
+        return text, ""
+
+    def flush(self) -> str:
+        """Flush any remaining tail buffer at end of stream."""
+        if self.in_think:
+            self.buffer = ""
+            return ""
+        flushed = redact_secrets(self.buffer)
+        self.buffer = ""
+        return flushed
 
 
 # ============================================================================
@@ -396,6 +541,101 @@ class ProviderResponseError(AIProviderError):
 
 
 # ============================================================================
+# NORMALIZED STREAM EVENT MODEL
+# ============================================================================
+
+class StreamEventType(str, Enum):
+    """Event classifications for incremental streaming deltas and lifecycle."""
+
+    START = "start"
+    DELTA = "delta"
+    DONE = "done"
+    ERROR = "error"
+
+
+class AIStreamChunk(BaseModel):
+    """Normalized stream event chunk returned by streaming provider adapters."""
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    event_type: StreamEventType = Field(
+        default=StreamEventType.DELTA,
+        description="Type of stream event: start, delta, done, error",
+    )
+    delta: str = Field(
+        default="",
+        description="Incremental sanitized text delta emitted in this chunk",
+    )
+    model_id: str = Field(
+        ...,
+        description="Canonical model identifier used for inference",
+    )
+    provider: Union[ModelProvider, str] = Field(
+        ...,
+        description="Provider that executed the inference",
+    )
+    finish_reason: Optional[str] = Field(
+        None,
+        description="Termination reason on completion, e.g. 'stop', 'length'",
+    )
+    usage: Optional[AIUsage] = Field(
+        None,
+        description="Normalized token usage details (populated on done)",
+    )
+    latency_ms: Optional[float] = Field(
+        None,
+        description="Execution latency in milliseconds",
+    )
+    request_id: Optional[str] = Field(
+        None,
+        description="Correlation tracking ID",
+    )
+    error: Optional[AIProviderError] = Field(
+        None,
+        description="Normalized provider error if stream encountered a failure",
+    )
+    metadata: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Sanitized metadata associated with this chunk",
+    )
+
+    @property
+    def model(self) -> str:
+        """Backward-compatibility alias matching legacy AIResponse.model."""
+        return self.model_id
+
+    @property
+    def is_done(self) -> bool:
+        return self.event_type == StreamEventType.DONE
+
+    @property
+    def is_error(self) -> bool:
+        return self.event_type == StreamEventType.ERROR
+
+    @property
+    def is_start(self) -> bool:
+        return self.event_type == StreamEventType.START
+
+    @property
+    def is_delta(self) -> bool:
+        return self.event_type == StreamEventType.DELTA
+
+    def __repr__(self) -> str:
+        """Safe representation without secret or raw payload leakage."""
+        provider_val = self.provider.value if isinstance(self.provider, ModelProvider) else self.provider
+        delta_preview = (self.delta[:40] + "...") if len(self.delta) > 40 else self.delta
+        delta_clean = redact_secrets(delta_preview)
+        return (
+            f"AIStreamChunk(event_type={self.event_type.value!r}, "
+            f"model_id={self.model_id!r}, "
+            f"provider={provider_val!r}, "
+            f"delta_length={len(self.delta)}, "
+            f"delta_preview={delta_clean!r}, "
+            f"finish_reason={self.finish_reason!r})"
+        )
+
+
+# ============================================================================
 # PROVIDER ADAPTER ABSTRACT CONTRACT
 # ============================================================================
 
@@ -412,6 +652,11 @@ class ProviderAdapter(ABC):
     async def generate(self, request: AIRequest) -> AIResponse:
         """Generate response from normalized AIRequest."""
         raise NotImplementedError
+
+    async def stream(self, request: AIRequest) -> AsyncIterator[AIStreamChunk]:
+        """Stream response chunks incrementally from the provider."""
+        raise NotImplementedError(f"Streaming is not supported by {self.__class__.__name__}")
+        yield  # type: ignore[unreachable]
 
     @abstractmethod
     async def health_check(self) -> Dict[str, Any]:

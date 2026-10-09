@@ -6,14 +6,16 @@ Implements thin, provider-neutral adapters wrapping existing low-level AI engine
 
 from __future__ import annotations
 
+import asyncio
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, AsyncIterator, Dict, List, Optional
 import httpx
 
 from app.ai.contracts import (
     AIProviderError,
     AIRequest,
     AIResponse,
+    AIStreamChunk,
     AIUsage,
     AuthenticationError,
     ContextOverflowError,
@@ -24,6 +26,8 @@ from app.ai.contracts import (
     ProviderUnavailableError,
     RateLimitError,
     SecurityViolationError,
+    StreamChunkSanitizer,
+    StreamEventType,
     sanitize_dict,
 )
 from app.ai.grok import GrokProvider, GrokUnavailableError
@@ -133,6 +137,159 @@ class OllamaAdapter(ProviderAdapter):
                 provider=ModelProvider.OLLAMA,
                 model_id=self.provider.model,
             ) from exc
+        finally:
+            self.provider.model = orig_model
+
+    async def stream(self, request: AIRequest) -> AsyncIterator[AIStreamChunk]:
+        """Stream response chunks incrementally from Ollama with bounded chunk sanitization."""
+        prompt = request.get_prompt_text()
+        if not prompt and request.messages:
+            prompt = request.messages[-1].content
+
+        orig_model = self.provider.model
+        if request.model_id and request.model_id.strip():
+            self.provider.model = request.model_id.strip()
+
+        kwargs: Dict[str, Any] = {}
+        if request.temperature is not None:
+            kwargs["temperature"] = request.temperature
+        if request.max_tokens is not None:
+            kwargs["num_predict"] = request.max_tokens
+
+        t0 = time.monotonic()
+        sanitizer = StreamChunkSanitizer()
+
+        try:
+            # Emit stream-start event
+            yield AIStreamChunk(
+                event_type=StreamEventType.START,
+                model_id=self.provider.model,
+                provider=ModelProvider.OLLAMA,
+                metadata={"started_at": t0},
+            )
+
+            done_emitted = False
+            last_chunk: Dict[str, Any] = {}
+
+            async for raw_chunk in self.provider.stream(
+                prompt=prompt,
+                system_prompt=request.system_prompt,
+                messages=request.messages,
+                images=request.images,
+                **kwargs,
+            ):
+                last_chunk = raw_chunk
+                msg = raw_chunk.get("message", {})
+                content = msg.get("content", "") if isinstance(msg, dict) else ""
+
+                if content:
+                    clean_delta = sanitizer.feed(content)
+                    if clean_delta:
+                        yield AIStreamChunk(
+                            event_type=StreamEventType.DELTA,
+                            delta=clean_delta,
+                            model_id=raw_chunk.get("model", self.provider.model),
+                            provider=ModelProvider.OLLAMA,
+                        )
+
+                if raw_chunk.get("done") is True:
+                    # Flush sanitizer remaining tail
+                    flushed = sanitizer.flush()
+                    if flushed:
+                        yield AIStreamChunk(
+                            event_type=StreamEventType.DELTA,
+                            delta=flushed,
+                            model_id=raw_chunk.get("model", self.provider.model),
+                            provider=ModelProvider.OLLAMA,
+                        )
+
+                    eval_count = raw_chunk.get("eval_count")
+                    prompt_eval_count = raw_chunk.get("prompt_eval_count")
+                    usage = None
+                    if eval_count is not None or prompt_eval_count is not None:
+                        usage = AIUsage.from_counts(
+                            prompt_tokens=prompt_eval_count,
+                            completion_tokens=eval_count,
+                        )
+
+                    latency_ms = round((time.monotonic() - t0) * 1000, 2)
+                    yield AIStreamChunk(
+                        event_type=StreamEventType.DONE,
+                        model_id=raw_chunk.get("model", self.provider.model),
+                        provider=ModelProvider.OLLAMA,
+                        finish_reason=raw_chunk.get("done_reason", "stop"),
+                        usage=usage,
+                        latency_ms=latency_ms,
+                        metadata=sanitize_dict(raw_chunk),
+                    )
+                    done_emitted = True
+                    break
+
+            if not done_emitted:
+                flushed = sanitizer.flush()
+                if flushed:
+                    yield AIStreamChunk(
+                        event_type=StreamEventType.DELTA,
+                        delta=flushed,
+                        model_id=self.provider.model,
+                        provider=ModelProvider.OLLAMA,
+                    )
+                latency_ms = round((time.monotonic() - t0) * 1000, 2)
+                yield AIStreamChunk(
+                    event_type=StreamEventType.DONE,
+                    model_id=self.provider.model,
+                    provider=ModelProvider.OLLAMA,
+                    finish_reason="stop",
+                    latency_ms=latency_ms,
+                    metadata=sanitize_dict(last_chunk),
+                )
+
+        except asyncio.CancelledError:
+            logger.info("Ollama streaming cancelled by consumer")
+            raise
+        except OllamaUnavailableError as exc:
+            err_msg = str(exc)
+            mapped_err = (
+                ProviderTimeoutError(err_msg, provider=ModelProvider.OLLAMA, model_id=self.provider.model)
+                if "timeout" in err_msg.lower() or "timed out" in err_msg.lower()
+                else ProviderUnavailableError(err_msg, provider=ModelProvider.OLLAMA, model_id=self.provider.model)
+            )
+            yield AIStreamChunk(
+                event_type=StreamEventType.ERROR,
+                error=mapped_err,
+                model_id=self.provider.model,
+                provider=ModelProvider.OLLAMA,
+                metadata={"error": str(mapped_err)},
+            )
+            raise mapped_err from exc
+        except httpx.TimeoutException as exc:
+            timeout_err = ProviderTimeoutError(
+                f"Ollama request timed out: {exc}",
+                provider=ModelProvider.OLLAMA,
+                model_id=self.provider.model,
+            )
+            yield AIStreamChunk(
+                event_type=StreamEventType.ERROR,
+                error=timeout_err,
+                model_id=self.provider.model,
+                provider=ModelProvider.OLLAMA,
+                metadata={"error": str(timeout_err)},
+            )
+            raise timeout_err from exc
+        except Exception as exc:
+            prov_err = ProviderUnavailableError(
+                f"Ollama streaming failed: {exc}",
+                provider=ModelProvider.OLLAMA,
+                model_id=self.provider.model,
+            )
+            yield AIStreamChunk(
+                event_type=StreamEventType.ERROR,
+                error=prov_err,
+                model_id=self.provider.model,
+                provider=ModelProvider.OLLAMA,
+                metadata={"error": str(prov_err)},
+            )
+            raise prov_err from exc
         finally:
             self.provider.model = orig_model
 
@@ -269,6 +426,23 @@ class GrokAdapter(ProviderAdapter):
             ) from exc
         finally:
             self.provider.model = orig_model
+
+    async def stream(self, request: AIRequest) -> AsyncIterator[AIStreamChunk]:
+        """Stream response chunks (Grok streaming is not supported by transport in Phase 2)."""
+        err = ProviderUnavailableError(
+            message="Streaming is not supported by Grok provider in this phase.",
+            provider=ModelProvider.GROK,
+            model_id=request.model_id or self.provider.model,
+        )
+        yield AIStreamChunk(
+            event_type=StreamEventType.ERROR,
+            error=err,
+            model_id=request.model_id or self.provider.model,
+            provider=ModelProvider.GROK,
+            metadata={"error": str(err)},
+        )
+        raise err
+
 
 
 # ============================================================================
@@ -427,3 +601,20 @@ class HuggingFaceAdapter(ProviderAdapter):
                 ) from exc
             finally:
                 self.local_provider.model_name = orig_model
+
+    async def stream(self, request: AIRequest) -> AsyncIterator[AIStreamChunk]:
+        """Stream response chunks (Hugging Face streaming is not supported by transport in Phase 2)."""
+        err = ProviderUnavailableError(
+            message="Streaming is not supported by Hugging Face provider in this phase.",
+            provider=self.provider_id,
+            model_id=request.model_id or "huggingface",
+        )
+        yield AIStreamChunk(
+            event_type=StreamEventType.ERROR,
+            error=err,
+            model_id=request.model_id or "huggingface",
+            provider=self.provider_id,
+            metadata={"error": str(err)},
+        )
+        raise err
+
