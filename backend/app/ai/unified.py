@@ -124,7 +124,29 @@ class UnifiedAIProvider(AIProvider):
 
         target_provider = self._providers.get(provider_key, self.ollama)
 
-        # 3. Attempt execution with chosen provider
+        # 2b. Enforce ModelSecurityGateway validation (no bypass possible)
+        req = AIRequest.from_prompt(
+            prompt=prompt,
+            system_prompt=system_prompt,
+            task_type=task_type,
+            model_id=decision.selected_model,
+            **kwargs,
+        )
+        if messages:
+            req.messages = messages
+
+        confirmation_token = kwargs.get("confirmation_token")
+        cfg_mode = self.router.config.privacy_mode if ("privacy_mode" in self.router.config.model_fields_set) else None
+        safe_req = await self.router.security_gateway.validate_request(
+            request=req,
+            provider=decision.provider,
+            model_id=decision.selected_model,
+            allow_remote=allow_remote,
+            privacy_mode=cfg_mode,
+            confirmation_token=confirmation_token,
+        )
+
+        # 3. Attempt execution with chosen provider using sanitized request
         from app.runtime.concurrency import concurrency_controller
         from app.runtime.performance import runtime_performance_service
 
@@ -138,9 +160,9 @@ class UnifiedAIProvider(AIProvider):
                     model=decision.selected_model,
                 ):
                     resp = await target_provider.generate(
-                        prompt=prompt,
-                        system_prompt=system_prompt,
-                        messages=messages,
+                        prompt=safe_req.get_prompt_text(),
+                        system_prompt=safe_req.system_prompt,
+                        messages=safe_req.messages,
                         **kwargs,
                     )
                     latency_ms = (time.monotonic() - t0) * 1000

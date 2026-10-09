@@ -44,6 +44,13 @@ from app.ai.health import (
     provider_circuit_breaker,
     provider_health_tracker,
 )
+from app.ai.privacy import (
+    PrivacyMode,
+)
+from app.ai.security_gateway import (
+    ModelSecurityGateway,
+    model_security_gateway,
+)
 from app.ai.router import (
     ModelRouter,
     estimate_task_complexity,
@@ -66,7 +73,9 @@ __all__ = [
     "ModelProfile",
     "ModelProvider",
     "ModelRouter",
+    "ModelSecurityGateway",
     "OllamaAdapter",
+    "PrivacyMode",
     "ProviderAdapter",
     "ProviderHealthRecord",
     "ProviderHealthTracker",
@@ -84,6 +93,7 @@ __all__ = [
     "default_router_config",
     "estimate_task_complexity",
     "model_router",
+    "model_security_gateway",
     "provider_circuit_breaker",
     "provider_health_tracker",
     "redact_secrets",

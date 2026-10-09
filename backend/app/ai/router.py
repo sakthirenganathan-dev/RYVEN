@@ -2,7 +2,7 @@
 
 Determines optimal, deterministic, policy-aware model assignment for cognitive tasks
 adhering to local-first privacy, hardware constraints, provider health metrics, and
-circuit-breaker states (M17.10 Phase 3).
+circuit-breaker states (M17.10 Phase 3 & Phase 4).
 """
 
 from __future__ import annotations
@@ -42,8 +42,10 @@ from app.ai.models import (
     RoutingDecision,
     TaskType,
 )
+from app.ai.privacy import PrivacyMode
 from app.ai.registry import ModelRegistry, model_registry
 from app.ai.security import ModelSecurityPolicy, model_security_policy
+from app.ai.security_gateway import ModelSecurityGateway, model_security_gateway
 from app.core.logging_config import logger
 
 
@@ -179,11 +181,21 @@ class ModelRouter:
         health_tracker: Optional[ProviderHealthTracker] = None,
         config: Optional[RouterConfig] = None,
         adapters: Optional[Dict[str, ProviderAdapter]] = None,
+        security_gateway: Optional[ModelSecurityGateway] = None,
     ) -> None:
         self.registry = registry or model_registry
         self.security_policy = security_policy or model_security_policy
         self.health_tracker = health_tracker or provider_health_tracker
         self.config = config or default_router_config
+        if security_gateway is not None:
+            self.security_gateway = security_gateway
+        elif security_policy is not None or config is not None:
+            self.security_gateway = ModelSecurityGateway(
+                security_policy=self.security_policy,
+                default_privacy_mode=self.config.privacy_mode if ("privacy_mode" in self.config.model_fields_set) else None,
+            )
+        else:
+            self.security_gateway = model_security_gateway
 
         self._adapters: Dict[str, ProviderAdapter] = adapters or {}
 
@@ -242,10 +254,35 @@ class ModelRouter:
         default_local = self.config.default_local_model
         default_local_provider = "OLLAMA"
 
-        # Check for sensitive data whenever remote is requested
-        if allow_remote:
-            is_sensitive, sens_reason = self.security_policy.scan_for_sensitive_data(prompt)
+        # Resolve privacy mode from gateway
+        resolved_cfg_mode = self.config.privacy_mode if ("privacy_mode" in self.config.model_fields_set) else None
+        privacy_mode = self.security_gateway.resolve_privacy_mode(resolved_cfg_mode)
+
+        # Check for sensitive data or LOCAL_ONLY restrictions whenever remote is considered
+        if not preferred_model_id and allow_remote:
+            if privacy_mode == PrivacyMode.LOCAL_ONLY:
+                return RoutingDecision(
+                    selected_model=default_local,
+                    provider=default_local_provider,
+                    task_type=task_type,
+                    reason="Remote inference requested but forbidden in LOCAL_ONLY privacy mode; assigned local default",
+                    reason_code="PRIVACY_POLICY_BLOCKED",
+                    fallback=default_local,
+                    fallback_eligible=True,
+                    fallback_model=default_local,
+                    fallback_provider=default_local_provider,
+                    remote_allowed=False,
+                    local_or_remote="local",
+                    memory_estimate_gb=4.36,
+                    estimated_complexity=complexity.value,
+                    context_size_requirement=context_size,
+                    latency_sensitive=latency_sensitive,
+                    health_summary=self.health_tracker.get_health_summary(default_local_provider),
+                )
+
+            is_sensitive, sens_findings = self.security_gateway.scan_sensitive_data(prompt)
             if is_sensitive:
+                sens_reason = ", ".join(sens_findings)
                 return RoutingDecision(
                     selected_model=default_local,
                     provider=default_local_provider,
@@ -311,6 +348,26 @@ class ModelRouter:
                     )
 
                 elif profile.local_or_remote == "remote":
+                    if privacy_mode == PrivacyMode.LOCAL_ONLY:
+                        return RoutingDecision(
+                            selected_model=profile.id,
+                            provider=profile.provider.value,
+                            task_type=task_type,
+                            reason=f"Remote model '{profile.id}' forbidden in LOCAL_ONLY privacy mode",
+                            reason_code="PRIVACY_POLICY_DENIAL",
+                            fallback=default_local,
+                            fallback_eligible=False,
+                            fallback_model=default_local,
+                            fallback_provider=default_local_provider,
+                            remote_allowed=False,
+                            local_or_remote="remote",
+                            memory_estimate_gb=0.0,
+                            estimated_complexity=complexity.value,
+                            context_size_requirement=context_size,
+                            latency_sensitive=latency_sensitive,
+                            health_summary=self.health_tracker.get_health_summary(profile.provider),
+                        )
+
                     # Remote preference requires explicit user allowance and system security permission
                     remote_permitted = (
                         allow_remote
@@ -318,7 +375,7 @@ class ModelRouter:
                     )
                     if remote_permitted:
                         is_sensitive, sens_reason = self.security_policy.scan_for_sensitive_data(prompt)
-                        if is_sensitive:
+                        if is_sensitive and privacy_mode in (PrivacyMode.PRIVACY_FIRST, PrivacyMode.LOCAL_ONLY):
                             return RoutingDecision(
                                 selected_model=default_local,
                                 provider=default_local_provider,
@@ -570,15 +627,17 @@ class ModelRouter:
             )
 
         # 8. High-Complexity Cognitive Reasoning / Code / Planning
-        # Remote reasoning is ONLY considered when complexity is HIGH and remote is explicitly authorized
+        # Remote reasoning is ONLY considered when complexity is HIGH, remote authorized, and not LOCAL_ONLY
         if (
             complexity == ComplexityTier.HIGH
             and allow_remote
             and (self.security_policy.allow_remote_inference or self.config.allow_remote_inference)
+            and privacy_mode != PrivacyMode.LOCAL_ONLY
         ):
             # Check for sensitive content
-            is_sensitive, sens_reason = self.security_policy.scan_for_sensitive_data(prompt)
+            is_sensitive, sens_findings = self.security_gateway.scan_sensitive_data(prompt)
             if is_sensitive:
+                sens_reason = ", ".join(sens_findings)
                 return RoutingDecision(
                     selected_model=default_local,
                     provider=default_local_provider,
@@ -687,7 +746,7 @@ class ModelRouter:
         )
 
     # ========================================================================
-    # EXECUTION BOUNDARY WITH CONTROLLED FALLBACK
+    # EXECUTION BOUNDARY WITH GATEWAY & CONTROLLED FALLBACK
     # ========================================================================
 
     async def execute(
@@ -696,7 +755,7 @@ class ModelRouter:
         preferred_model_id: Optional[str] = None,
         allow_remote: bool = False,
     ) -> AIResponse:
-        """Route request deterministically and execute with bounded fallback (depth <= 1)."""
+        """Route request deterministically, validate via ModelSecurityGateway, and execute with fallback."""
         task_type = request.task_type or TaskType.GENERAL_REASONING
         prompt = request.get_prompt_text()
 
@@ -725,13 +784,25 @@ class ModelRouter:
             )
         )
 
-        # 2. Prepare request for primary provider
+        # 2. Prepare request and validate through authoritative ModelSecurityGateway
+        self.security_gateway.security_policy = self.security_policy
         primary_adapter = self.get_adapter(decision.provider)
         req_copy = request.model_copy(update={"model_id": decision.selected_model})
+        confirmation_token = request.metadata.get("confirmation_token")
+        cfg_mode = self.config.privacy_mode if ("privacy_mode" in self.config.model_fields_set) else None
+
+        safe_req = await self.security_gateway.validate_request(
+            request=req_copy,
+            provider=decision.provider,
+            model_id=decision.selected_model,
+            allow_remote=allow_remote,
+            privacy_mode=cfg_mode,
+            confirmation_token=confirmation_token,
+        )
 
         t0 = time.monotonic()
         try:
-            resp = await primary_adapter.generate(req_copy)
+            resp = await primary_adapter.generate(safe_req)
             latency_ms = (time.monotonic() - t0) * 1000
             self.health_tracker.record_success(decision.provider, latency_ms)
             return resp
@@ -782,9 +853,20 @@ class ModelRouter:
             # Execute fallback with hard cap depth = 1 (never re-fallback on failure)
             fb_adapter = self.get_adapter(fallback_provider)
             fb_request = request.model_copy(update={"model_id": fallback_model})
+
+            # Re-validate fallback request through ModelSecurityGateway!
+            safe_fb_req = await self.security_gateway.validate_request(
+                request=fb_request,
+                provider=fallback_provider,
+                model_id=fallback_model,
+                allow_remote=allow_remote,
+                privacy_mode=cfg_mode,
+                confirmation_token=confirmation_token,
+            )
+
             t_fb = time.monotonic()
             try:
-                fb_resp = await fb_adapter.generate(fb_request)
+                fb_resp = await fb_adapter.generate(safe_fb_req)
                 fb_latency = (time.monotonic() - t_fb) * 1000
                 self.health_tracker.record_success(fallback_provider, fb_latency)
 
@@ -822,7 +904,7 @@ class ModelRouter:
         preferred_model_id: Optional[str] = None,
         allow_remote: bool = False,
     ) -> AsyncIterator[AIStreamChunk]:
-        """Stream chunks incrementally with deterministic fallback only BEFORE user-visible output."""
+        """Stream chunks incrementally with pre-stream gateway validation and fallback safety."""
         task_type = request.task_type or TaskType.GENERAL_REASONING
         prompt = request.get_prompt_text()
 
@@ -834,14 +916,31 @@ class ModelRouter:
             structured_output_schema=request.structured_output_schema,
         )
 
+        self.security_gateway.security_policy = self.security_policy
         primary_adapter = self.get_adapter(decision.provider)
         req_copy = request.model_copy(update={"model_id": decision.selected_model})
+        confirmation_token = request.metadata.get("confirmation_token")
+        cfg_mode = self.config.privacy_mode if ("privacy_mode" in self.config.model_fields_set) else None
+
+        # Pre-stream security gateway validation
+        safe_req = await self.security_gateway.validate_stream(
+            request=req_copy,
+            provider=decision.provider,
+            model_id=decision.selected_model,
+            allow_remote=allow_remote,
+            privacy_mode=cfg_mode,
+            confirmation_token=confirmation_token,
+        )
 
         visible_chunks_emitted: int = 0
         t0 = time.monotonic()
 
         try:
-            async for chunk in primary_adapter.stream(req_copy):
+            async for chunk in self.security_gateway.wrap_stream(
+                primary_adapter.stream(safe_req),
+                decision.provider,
+                decision.selected_model,
+            ):
                 if chunk.is_delta and chunk.delta:
                     visible_chunks_emitted += 1
                 yield chunk
@@ -898,10 +997,24 @@ class ModelRouter:
 
             fb_adapter = self.get_adapter(fallback_provider)
             fb_request = request.model_copy(update={"model_id": fallback_model})
-            t_fb = time.monotonic()
 
+            # Fresh security gateway validation for fallback stream
+            safe_fb_req = await self.security_gateway.validate_stream(
+                request=fb_request,
+                provider=fallback_provider,
+                model_id=fallback_model,
+                allow_remote=allow_remote,
+                privacy_mode=cfg_mode,
+                confirmation_token=confirmation_token,
+            )
+
+            t_fb = time.monotonic()
             try:
-                async for chunk in fb_adapter.stream(fb_request):
+                async for chunk in self.security_gateway.wrap_stream(
+                    fb_adapter.stream(safe_fb_req),
+                    fallback_provider,
+                    fallback_model,
+                ):
                     yield chunk
                 fb_latency = (time.monotonic() - t_fb) * 1000
                 self.health_tracker.record_success(fallback_provider, fb_latency)

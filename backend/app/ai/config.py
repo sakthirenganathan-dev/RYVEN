@@ -9,6 +9,8 @@ from __future__ import annotations
 from typing import Any, Dict
 from pydantic import BaseModel, Field, field_validator
 
+from app.ai.privacy import PrivacyMode, parse_privacy_mode
+
 
 class RouterConfig(BaseModel):
     """Validated configuration for the authoritative ModelRouter."""
@@ -16,6 +18,10 @@ class RouterConfig(BaseModel):
     default_local_model: str = Field(
         default="qwen2.5:7b",
         description="Default local model identifier",
+    )
+    privacy_mode: PrivacyMode = Field(
+        default=PrivacyMode.PRIVACY_FIRST,
+        description="Active privacy mode: LOCAL_ONLY, PRIVACY_FIRST, BALANCED, MAX_REASONING",
     )
     allow_remote_inference: bool = Field(
         default=False,
