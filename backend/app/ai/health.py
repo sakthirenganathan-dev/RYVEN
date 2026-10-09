@@ -256,7 +256,15 @@ class ProviderHealthTracker:
         """Record successful invocation for a provider and reset its circuit breaker."""
         rec, breaker = self._get_or_create(provider)
         rec.record_success(latency_ms)
+        prev_state = breaker.state.value
         breaker.record_success()
+        new_state = breaker.state.value
+        if prev_state != new_state:
+            try:
+                from app.ai.telemetry import model_telemetry_service
+                model_telemetry_service.record_circuit_change(self._canonical_key(provider), prev_state, new_state)
+            except Exception:
+                pass
 
     def record_failure(
         self,
@@ -271,7 +279,15 @@ class ProviderHealthTracker:
         # Do not trip circuit breaker on client validation or authentication errors;
         # Trip only on availability, timeout, and connection failures
         if isinstance(error, (ProviderUnavailableError, ProviderTimeoutError, RateLimitError)):
+            prev_state = breaker.state.value
             breaker.record_failure()
+            new_state = breaker.state.value
+            if prev_state != new_state:
+                try:
+                    from app.ai.telemetry import model_telemetry_service
+                    model_telemetry_service.record_circuit_change(self._canonical_key(provider), prev_state, new_state)
+                except Exception:
+                    pass
 
     def can_execute(self, provider: Union[ModelProvider, str]) -> bool:
         """Check if the provider circuit breaker allows execution."""

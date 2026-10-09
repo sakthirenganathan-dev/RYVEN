@@ -55,6 +55,18 @@ class RouterConfig(BaseModel):
         default=50,
         description="Bounded size of in-memory latency and telemetry records",
     )
+    telemetry_enabled: bool = Field(
+        default=True,
+        description="Whether operational telemetry and performance governance is enabled",
+    )
+    telemetry_max_events: int = Field(
+        default=1000,
+        description="Maximum bounded capacity of telemetry audit events ring buffer",
+    )
+    telemetry_max_requests: int = Field(
+        default=500,
+        description="Maximum bounded capacity of completed request records ring buffer",
+    )
 
     @field_validator("max_fallback_depth")
     @classmethod

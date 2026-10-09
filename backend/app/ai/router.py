@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import time
 from typing import Any, AsyncIterator, Dict, List, Optional, Tuple, Union
+import uuid
 
 from app.actions.event_bus import action_bus
 from app.actions.models import ActionEvent, ActionStatus, ActionType
@@ -46,6 +47,11 @@ from app.ai.privacy import PrivacyMode
 from app.ai.registry import ModelRegistry, model_registry
 from app.ai.security import ModelSecurityPolicy, model_security_policy
 from app.ai.security_gateway import ModelSecurityGateway, model_security_gateway
+from app.ai.telemetry import (
+    ModelTelemetryService,
+    model_telemetry_service,
+    normalize_error_category,
+)
 from app.core.logging_config import logger
 
 
@@ -182,11 +188,13 @@ class ModelRouter:
         config: Optional[RouterConfig] = None,
         adapters: Optional[Dict[str, ProviderAdapter]] = None,
         security_gateway: Optional[ModelSecurityGateway] = None,
+        telemetry: Optional[ModelTelemetryService] = None,
     ) -> None:
         self.registry = registry or model_registry
         self.security_policy = security_policy or model_security_policy
         self.health_tracker = health_tracker or provider_health_tracker
         self.config = config or default_router_config
+        self.telemetry = telemetry or model_telemetry_service
         if security_gateway is not None:
             self.security_gateway = security_gateway
         elif security_policy is not None or config is not None:
@@ -755,9 +763,22 @@ class ModelRouter:
         preferred_model_id: Optional[str] = None,
         allow_remote: bool = False,
     ) -> AIResponse:
-        """Route request deterministically, validate via ModelSecurityGateway, and execute with fallback."""
+        """Route request deterministically, validate via ModelSecurityGateway, and execute with fallback & telemetry."""
+        req_id = request.request_id or (request.metadata.get("request_id") if request.metadata else None) or str(uuid.uuid4())
         task_type = request.task_type or TaskType.GENERAL_REASONING
         prompt = request.get_prompt_text()
+
+        # Telemetry: start logical request tracking
+        cfg_mode_val = (self.config.privacy_mode.value if hasattr(self.config.privacy_mode, "value") else str(self.config.privacy_mode))
+        self.telemetry.start_request(
+            request_id=req_id,
+            task_type=task_type.value,
+            privacy_mode=cfg_mode_val,
+            local_or_remote_target="remote" if allow_remote else "local",
+            selected_provider="OLLAMA",
+            selected_model=preferred_model_id or self.config.default_local_model,
+            prompt_length=len(prompt),
+        )
 
         # 1. Resolve deterministic route
         decision = await self.route(
@@ -768,6 +789,8 @@ class ModelRouter:
             structured_output_schema=request.structured_output_schema,
         )
 
+        self.telemetry.record_routing_decision(req_id, decision)
+
         await action_bus.publish(
             ActionEvent(
                 action_type=ActionType.MODEL_ROUTE_SELECTED,
@@ -775,6 +798,7 @@ class ModelRouter:
                 title=f"Route Selected: {decision.selected_model}",
                 description=f"Assigned {decision.provider} for {decision.task_type.value}: {decision.reason}",
                 safe_metadata={
+                    "request_id": req_id,
                     "selected_model": decision.selected_model,
                     "provider": decision.provider,
                     "task_type": decision.task_type.value,
@@ -787,17 +811,44 @@ class ModelRouter:
         # 2. Prepare request and validate through authoritative ModelSecurityGateway
         self.security_gateway.security_policy = self.security_policy
         primary_adapter = self.get_adapter(decision.provider)
-        req_copy = request.model_copy(update={"model_id": decision.selected_model})
+        req_copy = request.model_copy(update={"model_id": decision.selected_model, "request_id": req_id})
         confirmation_token = request.metadata.get("confirmation_token")
         cfg_mode = self.config.privacy_mode if ("privacy_mode" in self.config.model_fields_set) else None
 
-        safe_req = await self.security_gateway.validate_request(
-            request=req_copy,
+        try:
+            safe_req = await self.security_gateway.validate_request(
+                request=req_copy,
+                provider=decision.provider,
+                model_id=decision.selected_model,
+                allow_remote=allow_remote,
+                privacy_mode=cfg_mode,
+                confirmation_token=confirmation_token,
+            )
+            self.telemetry.record_security_decision(
+                request_id=req_id,
+                allowed=True,
+                privacy_mode=cfg_mode_val,
+            )
+        except SecurityViolationError as sec_err:
+            self.telemetry.record_security_decision(
+                request_id=req_id,
+                allowed=False,
+                privacy_mode=cfg_mode_val,
+                reason=str(sec_err),
+            )
+            self.telemetry.complete_request(
+                request_id=req_id,
+                status="SECURITY_DENIED",
+                error=sec_err,
+            )
+            raise
+
+        primary_attempt_id = self.telemetry.start_provider_attempt(
+            request_id=req_id,
             provider=decision.provider,
             model_id=decision.selected_model,
-            allow_remote=allow_remote,
-            privacy_mode=cfg_mode,
-            confirmation_token=confirmation_token,
+            local_or_remote=decision.local_or_remote,
+            is_fallback=False,
         )
 
         t0 = time.monotonic()
@@ -805,12 +856,28 @@ class ModelRouter:
             resp = await primary_adapter.generate(safe_req)
             latency_ms = (time.monotonic() - t0) * 1000
             self.health_tracker.record_success(decision.provider, latency_ms)
+
+            # Extract token usage if supplied by provider
+            tok_in = resp.usage.prompt_tokens if (resp.usage and resp.usage.prompt_tokens is not None) else None
+            tok_out = resp.usage.completion_tokens if (resp.usage and resp.usage.completion_tokens is not None) else None
+            self.telemetry.complete_provider_attempt(
+                attempt_id=primary_attempt_id,
+                outcome="SUCCESS",
+                tokens_input=tok_in,
+                tokens_output=tok_out,
+            )
+            self.telemetry.complete_request(request_id=req_id, status="SUCCESS")
             return resp
 
         except (ProviderUnavailableError, ProviderTimeoutError, RateLimitError) as exc:
             # Eligible failures: Record failure and evaluate fallback
             latency_ms = (time.monotonic() - t0) * 1000
             self.health_tracker.record_failure(decision.provider, exc, latency_ms)
+            self.telemetry.complete_provider_attempt(
+                attempt_id=primary_attempt_id,
+                outcome=normalize_error_category(exc),
+                error=exc,
+            )
 
             # Verify fallback eligibility
             fallback_provider = decision.fallback_provider or "OLLAMA"
@@ -828,11 +895,24 @@ class ModelRouter:
                 logger.warning(
                     f"Provider '{decision.provider}' failed ({exc.error_code}). Fallback not eligible or disabled. Propagating error."
                 )
+                self.telemetry.complete_request(
+                    request_id=req_id,
+                    status="FAILED",
+                    error=exc,
+                )
                 raise
 
             logger.info(
                 f"Provider '{decision.provider}' failed ({exc.error_code}). "
                 f"Initiating controlled fallback to '{fallback_provider}' ({fallback_model})."
+            )
+
+            self.telemetry.record_fallback_started(
+                request_id=req_id,
+                from_provider=decision.provider,
+                to_provider=fallback_provider,
+                fallback_model=fallback_model,
+                reason_code=exc.error_code,
             )
 
             await action_bus.publish(
@@ -842,6 +922,7 @@ class ModelRouter:
                     title="Model Provider Fallback",
                     description=f"Provider {decision.provider} failed ({exc.error_code}). Bounded fallback to {fallback_provider} ({fallback_model}).",
                     safe_metadata={
+                        "request_id": req_id,
                         "fallback_from": decision.provider,
                         "fallback_to": fallback_provider,
                         "fallback_model": fallback_model,
@@ -852,16 +933,35 @@ class ModelRouter:
 
             # Execute fallback with hard cap depth = 1 (never re-fallback on failure)
             fb_adapter = self.get_adapter(fallback_provider)
-            fb_request = request.model_copy(update={"model_id": fallback_model})
+            fb_request = request.model_copy(update={"model_id": fallback_model, "request_id": req_id})
 
             # Re-validate fallback request through ModelSecurityGateway!
-            safe_fb_req = await self.security_gateway.validate_request(
-                request=fb_request,
+            try:
+                safe_fb_req = await self.security_gateway.validate_request(
+                    request=fb_request,
+                    provider=fallback_provider,
+                    model_id=fallback_model,
+                    allow_remote=allow_remote,
+                    privacy_mode=cfg_mode,
+                    confirmation_token=confirmation_token,
+                )
+            except SecurityViolationError as fb_sec_err:
+                self.telemetry.complete_request(
+                    request_id=req_id,
+                    status="SECURITY_DENIED",
+                    error=fb_sec_err,
+                    fallback_occurred=True,
+                    fallback_provider=fallback_provider,
+                    fallback_model=fallback_model,
+                )
+                raise
+
+            fb_attempt_id = self.telemetry.start_provider_attempt(
+                request_id=req_id,
                 provider=fallback_provider,
                 model_id=fallback_model,
-                allow_remote=allow_remote,
-                privacy_mode=cfg_mode,
-                confirmation_token=confirmation_token,
+                local_or_remote="local" if fallback_provider.upper() == "OLLAMA" else "remote",
+                is_fallback=True,
             )
 
             t_fb = time.monotonic()
@@ -869,6 +969,22 @@ class ModelRouter:
                 fb_resp = await fb_adapter.generate(safe_fb_req)
                 fb_latency = (time.monotonic() - t_fb) * 1000
                 self.health_tracker.record_success(fallback_provider, fb_latency)
+
+                fb_tok_in = fb_resp.usage.prompt_tokens if (fb_resp.usage and fb_resp.usage.prompt_tokens is not None) else None
+                fb_tok_out = fb_resp.usage.completion_tokens if (fb_resp.usage and fb_resp.usage.completion_tokens is not None) else None
+                self.telemetry.complete_provider_attempt(
+                    attempt_id=fb_attempt_id,
+                    outcome="SUCCESS",
+                    tokens_input=fb_tok_in,
+                    tokens_output=fb_tok_out,
+                )
+                self.telemetry.complete_request(
+                    request_id=req_id,
+                    status="SUCCESS",
+                    fallback_occurred=True,
+                    fallback_provider=fallback_provider,
+                    fallback_model=fallback_model,
+                )
 
                 # Attach sanitized fallback metadata to response
                 meta = dict(fb_resp.metadata)
@@ -881,6 +997,19 @@ class ModelRouter:
             except Exception as fb_exc:
                 fb_latency = (time.monotonic() - t_fb) * 1000
                 self.health_tracker.record_failure(fallback_provider, fb_exc, fb_latency)
+                self.telemetry.complete_provider_attempt(
+                    attempt_id=fb_attempt_id,
+                    outcome=normalize_error_category(fb_exc),
+                    error=fb_exc,
+                )
+                self.telemetry.complete_request(
+                    request_id=req_id,
+                    status="FAILED",
+                    error=fb_exc,
+                    fallback_occurred=True,
+                    fallback_provider=fallback_provider,
+                    fallback_model=fallback_model,
+                )
                 logger.error(f"Fallback provider '{fallback_provider}' also failed ({fb_exc}). Hard cap reached.")
                 raise
 
@@ -888,6 +1017,16 @@ class ModelRouter:
             # Non-eligible failures: propagate immediately without fallback
             latency_ms = (time.monotonic() - t0) * 1000
             self.health_tracker.record_failure(decision.provider, exc, latency_ms)
+            self.telemetry.complete_provider_attempt(
+                attempt_id=primary_attempt_id,
+                outcome=normalize_error_category(exc),
+                error=exc,
+            )
+            self.telemetry.complete_request(
+                request_id=req_id,
+                status="FAILED",
+                error=exc,
+            )
             logger.warning(
                 f"Non-retryable failure on provider '{decision.provider}': {exc.__class__.__name__}. Fallback forbidden."
             )
@@ -896,6 +1035,16 @@ class ModelRouter:
             # Unclassified errors
             latency_ms = (time.monotonic() - t0) * 1000
             self.health_tracker.record_failure(decision.provider, exc, latency_ms)
+            self.telemetry.complete_provider_attempt(
+                attempt_id=primary_attempt_id,
+                outcome=normalize_error_category(exc),
+                error=exc,
+            )
+            self.telemetry.complete_request(
+                request_id=req_id,
+                status="FAILED",
+                error=exc,
+            )
             raise
 
     async def stream(
@@ -904,9 +1053,21 @@ class ModelRouter:
         preferred_model_id: Optional[str] = None,
         allow_remote: bool = False,
     ) -> AsyncIterator[AIStreamChunk]:
-        """Stream chunks incrementally with pre-stream gateway validation and fallback safety."""
+        """Stream chunks incrementally with pre-stream gateway validation, fallback safety & telemetry."""
+        req_id = request.request_id or (request.metadata.get("request_id") if request.metadata else None) or str(uuid.uuid4())
         task_type = request.task_type or TaskType.GENERAL_REASONING
         prompt = request.get_prompt_text()
+
+        cfg_mode_val = (self.config.privacy_mode.value if hasattr(self.config.privacy_mode, "value") else str(self.config.privacy_mode))
+        self.telemetry.start_request(
+            request_id=req_id,
+            task_type=task_type.value,
+            privacy_mode=cfg_mode_val,
+            local_or_remote_target="remote" if allow_remote else "local",
+            selected_provider="OLLAMA",
+            selected_model=preferred_model_id or self.config.default_local_model,
+            prompt_length=len(prompt),
+        )
 
         decision = await self.route(
             task_type=task_type,
@@ -916,23 +1077,53 @@ class ModelRouter:
             structured_output_schema=request.structured_output_schema,
         )
 
+        self.telemetry.record_routing_decision(req_id, decision)
+
         self.security_gateway.security_policy = self.security_policy
         primary_adapter = self.get_adapter(decision.provider)
-        req_copy = request.model_copy(update={"model_id": decision.selected_model})
+        req_copy = request.model_copy(update={"model_id": decision.selected_model, "request_id": req_id})
         confirmation_token = request.metadata.get("confirmation_token")
         cfg_mode = self.config.privacy_mode if ("privacy_mode" in self.config.model_fields_set) else None
 
         # Pre-stream security gateway validation
-        safe_req = await self.security_gateway.validate_stream(
-            request=req_copy,
+        try:
+            safe_req = await self.security_gateway.validate_stream(
+                request=req_copy,
+                provider=decision.provider,
+                model_id=decision.selected_model,
+                allow_remote=allow_remote,
+                privacy_mode=cfg_mode,
+                confirmation_token=confirmation_token,
+            )
+            self.telemetry.record_security_decision(
+                request_id=req_id,
+                allowed=True,
+                privacy_mode=cfg_mode_val,
+            )
+        except SecurityViolationError as sec_err:
+            self.telemetry.record_security_decision(
+                request_id=req_id,
+                allowed=False,
+                privacy_mode=cfg_mode_val,
+                reason=str(sec_err),
+            )
+            self.telemetry.complete_request(
+                request_id=req_id,
+                status="SECURITY_DENIED",
+                error=sec_err,
+            )
+            raise
+
+        primary_attempt_id = self.telemetry.start_provider_attempt(
+            request_id=req_id,
             provider=decision.provider,
             model_id=decision.selected_model,
-            allow_remote=allow_remote,
-            privacy_mode=cfg_mode,
-            confirmation_token=confirmation_token,
+            local_or_remote=decision.local_or_remote,
+            is_fallback=False,
         )
 
         visible_chunks_emitted: int = 0
+        first_token_recorded: bool = False
         t0 = time.monotonic()
 
         try:
@@ -943,15 +1134,29 @@ class ModelRouter:
             ):
                 if chunk.is_delta and chunk.delta:
                     visible_chunks_emitted += 1
+                    if not first_token_recorded:
+                        first_token_recorded = True
+                        self.telemetry.record_first_token(primary_attempt_id)
                 yield chunk
 
             latency_ms = (time.monotonic() - t0) * 1000
             self.health_tracker.record_success(decision.provider, latency_ms)
+            self.telemetry.complete_provider_attempt(primary_attempt_id, outcome="SUCCESS")
+            self.telemetry.complete_request(request_id=req_id, status="SUCCESS")
             return
+
+        except asyncio.CancelledError:
+            self.telemetry.record_stream_cancelled(req_id, primary_attempt_id)
+            raise
 
         except (ProviderUnavailableError, ProviderTimeoutError, RateLimitError) as exc:
             latency_ms = (time.monotonic() - t0) * 1000
             self.health_tracker.record_failure(decision.provider, exc, latency_ms)
+            self.telemetry.complete_provider_attempt(
+                primary_attempt_id,
+                outcome=normalize_error_category(exc),
+                error=exc,
+            )
 
             # CRITICAL STREAMING INVARIANT:
             # If user-visible text was already emitted, NEVER switch providers mid-stream!
@@ -960,6 +1165,7 @@ class ModelRouter:
                     f"Stream error after {visible_chunks_emitted} visible chunk(s) emitted. "
                     "Refusing provider switch to avoid corrupted stream output."
                 )
+                self.telemetry.complete_request(request_id=req_id, status="FAILED", error=exc)
                 yield AIStreamChunk(
                     event_type=StreamEventType.ERROR,
                     error=exc,
@@ -982,6 +1188,7 @@ class ModelRouter:
             )
 
             if not can_fallback:
+                self.telemetry.complete_request(request_id=req_id, status="FAILED", error=exc)
                 yield AIStreamChunk(
                     event_type=StreamEventType.ERROR,
                     error=exc,
@@ -994,20 +1201,47 @@ class ModelRouter:
             logger.info(
                 f"Stream failure prior to output. Initiating fallback from {decision.provider} to {fallback_provider}."
             )
-
-            fb_adapter = self.get_adapter(fallback_provider)
-            fb_request = request.model_copy(update={"model_id": fallback_model})
-
-            # Fresh security gateway validation for fallback stream
-            safe_fb_req = await self.security_gateway.validate_stream(
-                request=fb_request,
-                provider=fallback_provider,
-                model_id=fallback_model,
-                allow_remote=allow_remote,
-                privacy_mode=cfg_mode,
-                confirmation_token=confirmation_token,
+            self.telemetry.record_fallback_started(
+                request_id=req_id,
+                from_provider=decision.provider,
+                to_provider=fallback_provider,
+                fallback_model=fallback_model,
+                reason_code=exc.error_code,
             )
 
+            fb_adapter = self.get_adapter(fallback_provider)
+            fb_request = request.model_copy(update={"model_id": fallback_model, "request_id": req_id})
+
+            # Fresh security gateway validation for fallback stream
+            try:
+                safe_fb_req = await self.security_gateway.validate_stream(
+                    request=fb_request,
+                    provider=fallback_provider,
+                    model_id=fallback_model,
+                    allow_remote=allow_remote,
+                    privacy_mode=cfg_mode,
+                    confirmation_token=confirmation_token,
+                )
+            except SecurityViolationError as fb_sec_err:
+                self.telemetry.complete_request(
+                    request_id=req_id,
+                    status="SECURITY_DENIED",
+                    error=fb_sec_err,
+                    fallback_occurred=True,
+                    fallback_provider=fallback_provider,
+                    fallback_model=fallback_model,
+                )
+                raise
+
+            fb_attempt_id = self.telemetry.start_provider_attempt(
+                request_id=req_id,
+                provider=fallback_provider,
+                model_id=fallback_model,
+                local_or_remote="local" if fallback_provider.upper() == "OLLAMA" else "remote",
+                is_fallback=True,
+            )
+
+            fb_first_token_recorded: bool = False
             t_fb = time.monotonic()
             try:
                 async for chunk in self.security_gateway.wrap_stream(
@@ -1015,23 +1249,63 @@ class ModelRouter:
                     fallback_provider,
                     fallback_model,
                 ):
+                    if chunk.is_delta and chunk.delta and not fb_first_token_recorded:
+                        fb_first_token_recorded = True
+                        self.telemetry.record_first_token(fb_attempt_id)
                     yield chunk
+
                 fb_latency = (time.monotonic() - t_fb) * 1000
                 self.health_tracker.record_success(fallback_provider, fb_latency)
+                self.telemetry.complete_provider_attempt(fb_attempt_id, outcome="SUCCESS")
+                self.telemetry.complete_request(
+                    request_id=req_id,
+                    status="SUCCESS",
+                    fallback_occurred=True,
+                    fallback_provider=fallback_provider,
+                    fallback_model=fallback_model,
+                )
                 return
+            except asyncio.CancelledError:
+                self.telemetry.record_stream_cancelled(req_id, fb_attempt_id)
+                raise
             except Exception as fb_exc:
                 fb_latency = (time.monotonic() - t_fb) * 1000
                 self.health_tracker.record_failure(fallback_provider, fb_exc, fb_latency)
+                self.telemetry.complete_provider_attempt(
+                    fb_attempt_id,
+                    outcome=normalize_error_category(fb_exc),
+                    error=fb_exc,
+                )
+                self.telemetry.complete_request(
+                    request_id=req_id,
+                    status="FAILED",
+                    error=fb_exc,
+                    fallback_occurred=True,
+                    fallback_provider=fallback_provider,
+                    fallback_model=fallback_model,
+                )
                 logger.error(f"Fallback stream provider '{fallback_provider}' failed ({fb_exc}).")
                 raise
 
-        except (AuthenticationError, SecurityViolationError, ProviderInvalidRequestError, asyncio.CancelledError) as exc:
+        except (AuthenticationError, SecurityViolationError, ProviderInvalidRequestError) as exc:
             latency_ms = (time.monotonic() - t0) * 1000
             self.health_tracker.record_failure(decision.provider, exc, latency_ms)
+            self.telemetry.complete_provider_attempt(
+                primary_attempt_id,
+                outcome=normalize_error_category(exc),
+                error=exc,
+            )
+            self.telemetry.complete_request(request_id=req_id, status="FAILED", error=exc)
             raise
         except Exception as exc:
             latency_ms = (time.monotonic() - t0) * 1000
             self.health_tracker.record_failure(decision.provider, exc, latency_ms)
+            self.telemetry.complete_provider_attempt(
+                primary_attempt_id,
+                outcome=normalize_error_category(exc),
+                error=exc,
+            )
+            self.telemetry.complete_request(request_id=req_id, status="FAILED", error=exc)
             raise
 
 

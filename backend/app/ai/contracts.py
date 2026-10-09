@@ -269,6 +269,7 @@ class AIUsage(BaseModel):
 class AIRequest(BaseModel):
     """Provider-neutral model invocation request."""
 
+    request_id: Optional[str] = Field(None, description="Correlation identifier for request tracking")
     messages: List[ChatMessage] = Field(default_factory=list, description="Conversation turns")
     system_prompt: Optional[str] = Field(None, description="System guidance instructions")
     model_id: Optional[str] = Field(None, description="Requested target model identifier")
@@ -340,6 +341,11 @@ class AIResponse(BaseModel):
     def model(self) -> str:
         """Backward-compatibility alias matching legacy AIResponse.model."""
         return self.model_id
+
+    @property
+    def text(self) -> str:
+        """Backward-compatibility alias matching legacy AIResponse.text."""
+        return self.content
 
     def __repr__(self) -> str:
         """Safe string representation without secret leakage."""

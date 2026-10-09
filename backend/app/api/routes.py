@@ -651,6 +651,25 @@ async def get_models_route_endpoint(
     }
 
 
+@router.get("/v1/models/telemetry")
+@router.get("/models/telemetry")
+async def get_models_telemetry_endpoint() -> Dict[str, Any]:
+    """Retrieve privacy-preserving operational telemetry and performance governance summary."""
+    from app.ai.telemetry import model_telemetry_service
+    return model_telemetry_service.get_summary()
+
+
+@router.get("/v1/models/telemetry/events")
+@router.get("/models/telemetry/events")
+async def get_models_telemetry_events_endpoint(
+    limit: int = 50,
+    event_type: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """Retrieve bounded sanitized recent telemetry audit events without secrets or prompt text."""
+    from app.ai.telemetry import model_telemetry_service
+    return model_telemetry_service.get_events(limit=limit, event_type=event_type)
+
+
 # --------------------------------------------------------------------------
 # M15.2 VISION & OCR API ENDPOINTS
 # --------------------------------------------------------------------------

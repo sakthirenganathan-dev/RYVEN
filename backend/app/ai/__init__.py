@@ -51,6 +51,11 @@ from app.ai.security_gateway import (
     ModelSecurityGateway,
     model_security_gateway,
 )
+from app.ai.telemetry import (
+    ModelTelemetryService,
+    TelemetryEventType,
+    model_telemetry_service,
+)
 from app.ai.router import (
     ModelRouter,
     estimate_task_complexity,
@@ -74,6 +79,8 @@ __all__ = [
     "ModelProvider",
     "ModelRouter",
     "ModelSecurityGateway",
+    "ModelTelemetryService",
+    "TelemetryEventType",
     "OllamaAdapter",
     "PrivacyMode",
     "ProviderAdapter",
@@ -94,6 +101,7 @@ __all__ = [
     "estimate_task_complexity",
     "model_router",
     "model_security_gateway",
+    "model_telemetry_service",
     "provider_circuit_breaker",
     "provider_health_tracker",
     "redact_secrets",
