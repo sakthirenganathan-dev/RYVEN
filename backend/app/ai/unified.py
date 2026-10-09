@@ -6,9 +6,17 @@ Local Hugging Face providers with deterministic routing, safety checks, and fall
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+import time
+from typing import Any, AsyncIterator, Dict, List, Optional
 from app.actions.event_bus import action_bus
 from app.actions.models import ActionEvent, ActionStatus, ActionType
+from app.ai.contracts import (
+    AIRequest,
+    AIStreamChunk,
+    ProviderTimeoutError,
+    ProviderUnavailableError,
+    RateLimitError,
+)
 from app.ai.grok import GrokProvider, GrokUnavailableError
 from app.ai.hf_local import HuggingFaceLocalProvider, HuggingFaceLocalUnavailableError
 from app.ai.hf_remote import HuggingFaceRemoteProvider, HuggingFaceRemoteUnavailableError
@@ -57,6 +65,9 @@ class UnifiedAIProvider(AIProvider):
         hf_remote_health = await self.hf_remote.check_health()
         hf_local_health = await self.hf_local.check_health()
 
+        # Augment with router health summary
+        router_health = self.router.health_tracker.get_health_summary()
+
         return {
             "provider": self.provider_name,
             "active_default": "ollama",
@@ -67,6 +78,7 @@ class UnifiedAIProvider(AIProvider):
                 "huggingface_remote": hf_remote_health,
                 "huggingface_local": hf_local_health,
             },
+            "circuit_breakers": router_health,
         }
 
     async def generate(
@@ -98,6 +110,7 @@ class UnifiedAIProvider(AIProvider):
                     "selected_model": decision.selected_model,
                     "provider": decision.provider,
                     "task_type": decision.task_type.value,
+                    "reason_code": decision.reason_code,
                     "local": decision.local_or_remote == "local",
                     "reason": decision.reason,
                 },
@@ -115,6 +128,7 @@ class UnifiedAIProvider(AIProvider):
         from app.runtime.concurrency import concurrency_controller
         from app.runtime.performance import runtime_performance_service
 
+        t0 = time.monotonic()
         try:
             async with concurrency_controller.limit_llm():
                 async with runtime_performance_service.profile(
@@ -123,25 +137,38 @@ class UnifiedAIProvider(AIProvider):
                     provider=decision.provider,
                     model=decision.selected_model,
                 ):
-                    return await target_provider.generate(
+                    resp = await target_provider.generate(
                         prompt=prompt,
                         system_prompt=system_prompt,
                         messages=messages,
                         **kwargs,
                     )
+                    latency_ms = (time.monotonic() - t0) * 1000
+                    self.router.health_tracker.record_success(decision.provider, latency_ms)
+                    return resp
         except (
             GrokUnavailableError,
             HuggingFaceRemoteUnavailableError,
             HuggingFaceLocalUnavailableError,
             OllamaUnavailableError,
+            ProviderUnavailableError,
+            ProviderTimeoutError,
+            RateLimitError,
         ) as exc:
+            latency_ms = (time.monotonic() - t0) * 1000
+            self.router.health_tracker.record_failure(decision.provider, exc, latency_ms)
             logger.warning(
                 f"Provider '{decision.provider}' failed ({exc}). Initiating deterministic fallback chain."
             )
 
             # 4. Fallback Execution Chain
-            # If target provider was not Ollama, attempt local Ollama Qwen fallback
-            if target_provider != self.ollama:
+            # Check if fallback is permitted by router config
+            if (
+                self.router.config.fallback_enabled
+                and self.router.config.max_fallback_depth >= 1
+                and decision.fallback_eligible
+                and target_provider != self.ollama
+            ):
                 logger.info(f"Falling back from '{decision.provider}' to default local Ollama Qwen.")
                 await action_bus.publish(
                     ActionEvent(
@@ -152,22 +179,60 @@ class UnifiedAIProvider(AIProvider):
                         safe_metadata={"fallback_provider": "ollama", "fallback_model": self.ollama.model},
                     )
                 )
-                async with concurrency_controller.limit_llm():
-                    async with runtime_performance_service.profile(
-                        name=f"llm_fallback_{self.ollama.model}",
-                        category="llm",
-                        provider="ollama",
-                        model=self.ollama.model,
-                    ):
-                        return await self.ollama.generate(
-                            prompt=prompt,
-                            system_prompt=system_prompt,
-                            messages=messages,
-                            **kwargs,
-                        )
+                t_fb = time.monotonic()
+                try:
+                    async with concurrency_controller.limit_llm():
+                        async with runtime_performance_service.profile(
+                            name=f"llm_fallback_{self.ollama.model}",
+                            category="llm",
+                            provider="ollama",
+                            model=self.ollama.model,
+                        ):
+                            fb_resp = await self.ollama.generate(
+                                prompt=prompt,
+                                system_prompt=system_prompt,
+                                messages=messages,
+                                **kwargs,
+                            )
+                            fb_latency = (time.monotonic() - t_fb) * 1000
+                            self.router.health_tracker.record_success("OLLAMA", fb_latency)
+                            return fb_resp
+                except Exception as fb_exc:
+                    fb_latency = (time.monotonic() - t_fb) * 1000
+                    self.router.health_tracker.record_failure("OLLAMA", fb_exc, fb_latency)
+                    raise
 
-            # If Ollama itself was the target and failed, propagate the error
+            # If Ollama itself was the target or fallback disabled, propagate
             raise
+
+    async def stream(
+        self,
+        prompt: str,
+        system_prompt: Optional[str] = None,
+        messages: Optional[List[ChatMessage]] = None,
+        task_type: TaskType = TaskType.GENERAL_REASONING,
+        allow_remote: bool = False,
+        preferred_model_id: Optional[str] = None,
+        **kwargs: Any,
+    ) -> AsyncIterator[AIStreamChunk]:
+        """Stream response chunks incrementally via authoritative router."""
+        req = AIRequest.from_prompt(
+            prompt=prompt,
+            system_prompt=system_prompt,
+            task_type=task_type,
+            model_id=preferred_model_id,
+            stream=True,
+            **kwargs,
+        )
+        if messages:
+            req.messages = messages
+
+        async for chunk in self.router.stream(
+            request=req,
+            preferred_model_id=preferred_model_id,
+            allow_remote=allow_remote,
+        ):
+            yield chunk
 
 
 # Global default unified provider singleton
