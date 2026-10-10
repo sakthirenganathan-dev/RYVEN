@@ -52,8 +52,14 @@ class Settings(BaseModel):
         default_factory=lambda: float(os.getenv("GROK_TIMEOUT_SECONDS", "60.0"))
     )
 
-    # Hugging Face Provider (M15.1 - Optional / Opt-in)
-    hf_api_key: str | None = Field(default_factory=lambda: os.getenv("HF_API_KEY"))
+    # Hugging Face Provider (M15.1 / M17.10 Phase 7 - Optional / Opt-in)
+    hf_api_key: str | None = Field(
+        default_factory=lambda: (
+            os.getenv("HF_API_KEY")
+            or os.getenv("HUGGINGFACE_API_KEY")
+            or os.getenv("HF_TOKEN")
+        )
+    )
     hf_base_url: str = Field(
         default_factory=lambda: os.getenv("HF_BASE_URL", "https://api-inference.huggingface.co/v1").rstrip("/")
     )

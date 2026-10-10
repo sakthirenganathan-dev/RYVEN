@@ -59,11 +59,11 @@ class UnifiedAIProvider(AIProvider):
             from app.ai.adapters import HuggingFaceAdapter
             self.router.register_adapter(
                 ModelProvider.HUGGINGFACE_REMOTE,
-                HuggingFaceAdapter(remote_provider=self.hf_remote, local_provider=self.hf_local),
+                HuggingFaceAdapter(remote_provider=self.hf_remote, local_provider=self.hf_local, prefer_local=False),
             )
             self.router.register_adapter(
                 ModelProvider.HUGGINGFACE_LOCAL,
-                HuggingFaceAdapter(remote_provider=self.hf_remote, local_provider=self.hf_local),
+                HuggingFaceAdapter(remote_provider=self.hf_remote, local_provider=self.hf_local, prefer_local=True),
             )
 
         self._providers: Dict[str, AIProvider] = {

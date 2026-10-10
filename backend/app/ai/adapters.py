@@ -534,23 +534,47 @@ class HuggingFaceAdapter(ProviderAdapter):
                 )
                 latency_ms = round((time.monotonic() - t0) * 1000, 2)
                 meta = legacy_resp.metadata or {}
+                usage_data = meta.get("usage", {})
+                usage = None
+                if usage_data and isinstance(usage_data, dict):
+                    usage = AIUsage(
+                        prompt_tokens=usage_data.get("prompt_tokens"),
+                        completion_tokens=usage_data.get("completion_tokens"),
+                        total_tokens=usage_data.get("total_tokens"),
+                    )
                 return AIResponse(
                     content=legacy_resp.content,
                     model_id=legacy_resp.model,
                     provider=ModelProvider.HUGGINGFACE_REMOTE,
                     finish_reason="stop",
+                    usage=usage,
                     latency_ms=latency_ms,
                     metadata=sanitize_dict(meta),
                 )
+            except AIProviderError:
+                raise
             except HuggingFaceRemoteUnavailableError as exc:
                 err_msg = str(exc)
-                if "authentication" in err_msg.lower() or "401" in err_msg.lower():
+                err_lower = err_msg.lower()
+                if "authentication" in err_lower or "401" in err_lower or "403" in err_lower:
                     raise AuthenticationError(
                         message=err_msg,
                         provider=ModelProvider.HUGGINGFACE_REMOTE,
                         model_id=self.remote_provider.model,
                     ) from exc
-                if "security policy" in err_msg.lower() or "not allowed" in err_msg.lower():
+                if "rate limit" in err_lower or "429" in err_lower:
+                    raise RateLimitError(
+                        message=err_msg,
+                        provider=ModelProvider.HUGGINGFACE_REMOTE,
+                        model_id=self.remote_provider.model,
+                    ) from exc
+                if "timeout" in err_lower or "timed out" in err_lower:
+                    raise ProviderTimeoutError(
+                        message=err_msg,
+                        provider=ModelProvider.HUGGINGFACE_REMOTE,
+                        model_id=self.remote_provider.model,
+                    ) from exc
+                if "security policy" in err_lower or "not allowed" in err_lower or "blocked" in err_lower:
                     raise SecurityViolationError(
                         message=err_msg,
                         provider=ModelProvider.HUGGINGFACE_REMOTE,
@@ -567,6 +591,14 @@ class HuggingFaceAdapter(ProviderAdapter):
                     provider=ModelProvider.HUGGINGFACE_REMOTE,
                     model_id=self.remote_provider.model,
                 ) from exc
+            except httpx.TimeoutException as exc:
+                raise ProviderTimeoutError(
+                    message=f"Hugging Face request timed out: {exc}",
+                    provider=ModelProvider.HUGGINGFACE_REMOTE,
+                    model_id=self.remote_provider.model,
+                ) from exc
+            except asyncio.CancelledError:
+                raise
             except Exception as exc:
                 raise ProviderUnavailableError(
                     message=f"Hugging Face Remote execution failed: {exc}",
@@ -613,18 +645,228 @@ class HuggingFaceAdapter(ProviderAdapter):
                 self.local_provider.model_name = orig_model
 
     async def stream(self, request: AIRequest) -> AsyncIterator[AIStreamChunk]:
-        """Stream response chunks (Hugging Face streaming is not supported by transport in Phase 2)."""
-        err = ProviderUnavailableError(
-            message="Streaming is not supported by Hugging Face provider in this phase.",
-            provider=self.provider_id,
-            model_id=request.model_id or "huggingface",
-        )
-        yield AIStreamChunk(
-            event_type=StreamEventType.ERROR,
-            error=err,
-            model_id=request.model_id or "huggingface",
-            provider=self.provider_id,
-            metadata={"error": str(err)},
-        )
-        raise err
+        """Stream response chunks incrementally from Hugging Face Remote or error on Local."""
+        model_id = request.model_id or ""
+        use_remote = "remote" in model_id.lower() or not self.prefer_local
 
+        if not use_remote:
+            err = ProviderUnavailableError(
+                message="Streaming is not supported by Hugging Face provider for local models.",
+                provider=ModelProvider.HUGGINGFACE_LOCAL,
+                model_id=request.model_id or getattr(self.local_provider, "model_name", "local"),
+            )
+            yield AIStreamChunk(
+                event_type=StreamEventType.ERROR,
+                error=err,
+                model_id=request.model_id or getattr(self.local_provider, "model_name", "local"),
+                provider=ModelProvider.HUGGINGFACE_LOCAL,
+                metadata={"error": str(err)},
+            )
+            raise err
+
+        if getattr(self.remote_provider, "supports_streaming", False) is not True:
+            err = ProviderUnavailableError(
+                message="Streaming is not supported by Hugging Face provider for this endpoint.",
+                provider=ModelProvider.HUGGINGFACE_REMOTE,
+                model_id=model_id or getattr(self.remote_provider, "model", "huggingface"),
+            )
+            yield AIStreamChunk(
+                event_type=StreamEventType.ERROR,
+                error=err,
+                model_id=model_id or getattr(self.remote_provider, "model", "huggingface"),
+                provider=ModelProvider.HUGGINGFACE_REMOTE,
+                metadata={"error": str(err)},
+            )
+            raise err
+
+        if not self.remote_provider.api_key or not self.remote_provider.api_key.strip():
+            auth_err = AuthenticationError(
+                message="Hugging Face API key is not configured for remote inference.",
+                provider=ModelProvider.HUGGINGFACE_REMOTE,
+                model_id=model_id or self.remote_provider.model,
+            )
+            yield AIStreamChunk(
+                event_type=StreamEventType.ERROR,
+                error=auth_err,
+                model_id=model_id or self.remote_provider.model,
+                provider=ModelProvider.HUGGINGFACE_REMOTE,
+                metadata={"error": str(auth_err)},
+            )
+            raise auth_err
+
+        prompt = request.get_prompt_text()
+        if not prompt and request.messages:
+            prompt = request.messages[-1].content
+
+        orig_model = self.remote_provider.model
+        if model_id and model_id.strip():
+            self.remote_provider.model = model_id.strip()
+
+        t0 = time.monotonic()
+        sanitizer = StreamChunkSanitizer()
+
+        try:
+            yield AIStreamChunk(
+                event_type=StreamEventType.START,
+                model_id=self.remote_provider.model,
+                provider=ModelProvider.HUGGINGFACE_REMOTE,
+                metadata={"started_at": t0},
+            )
+
+            done_emitted = False
+            last_chunk: Dict[str, Any] = {}
+
+            async for raw_chunk in self.remote_provider.stream(
+                prompt=prompt,
+                system_prompt=request.system_prompt,
+                messages=request.messages,
+            ):
+                last_chunk = raw_chunk
+                msg = raw_chunk.get("message", {})
+                content = msg.get("content", "") if isinstance(msg, dict) else ""
+
+                if content:
+                    clean_delta = sanitizer.feed(content)
+                    if clean_delta:
+                        yield AIStreamChunk(
+                            event_type=StreamEventType.DELTA,
+                            delta=clean_delta,
+                            model_id=raw_chunk.get("model", self.remote_provider.model),
+                            provider=ModelProvider.HUGGINGFACE_REMOTE,
+                        )
+
+                if raw_chunk.get("done") is True:
+                    flushed = sanitizer.flush()
+                    if flushed:
+                        yield AIStreamChunk(
+                            event_type=StreamEventType.DELTA,
+                            delta=flushed,
+                            model_id=raw_chunk.get("model", self.remote_provider.model),
+                            provider=ModelProvider.HUGGINGFACE_REMOTE,
+                        )
+
+                    raw_usage = raw_chunk.get("usage")
+                    usage = None
+                    if isinstance(raw_usage, dict):
+                        usage = AIUsage(
+                            prompt_tokens=raw_usage.get("prompt_tokens"),
+                            completion_tokens=raw_usage.get("completion_tokens"),
+                            total_tokens=raw_usage.get("total_tokens"),
+                        )
+
+                    latency_ms = round((time.monotonic() - t0) * 1000, 2)
+                    yield AIStreamChunk(
+                        event_type=StreamEventType.DONE,
+                        model_id=raw_chunk.get("model", self.remote_provider.model),
+                        provider=ModelProvider.HUGGINGFACE_REMOTE,
+                        finish_reason=raw_chunk.get("done_reason", "stop"),
+                        usage=usage,
+                        latency_ms=latency_ms,
+                        metadata=sanitize_dict(raw_chunk),
+                    )
+                    done_emitted = True
+                    break
+
+            if not done_emitted:
+                flushed = sanitizer.flush()
+                if flushed:
+                    yield AIStreamChunk(
+                        event_type=StreamEventType.DELTA,
+                        delta=flushed,
+                        model_id=self.remote_provider.model,
+                        provider=ModelProvider.HUGGINGFACE_REMOTE,
+                    )
+                latency_ms = round((time.monotonic() - t0) * 1000, 2)
+                yield AIStreamChunk(
+                    event_type=StreamEventType.DONE,
+                    model_id=self.remote_provider.model,
+                    provider=ModelProvider.HUGGINGFACE_REMOTE,
+                    finish_reason="stop",
+                    latency_ms=latency_ms,
+                    metadata=sanitize_dict(last_chunk),
+                )
+
+        except asyncio.CancelledError:
+            logger.info("Hugging Face streaming cancelled by consumer")
+            raise
+        except AIProviderError as exc:
+            yield AIStreamChunk(
+                event_type=StreamEventType.ERROR,
+                error=exc,
+                model_id=self.remote_provider.model,
+                provider=ModelProvider.HUGGINGFACE_REMOTE,
+                metadata={"error": str(exc)},
+            )
+            raise
+        except HuggingFaceRemoteUnavailableError as exc:
+            err_msg = str(exc)
+            err_lower = err_msg.lower()
+            mapped_err: AIProviderError
+            if "authentication" in err_lower or "401" in err_lower or "403" in err_lower:
+                mapped_err = AuthenticationError(
+                    message=err_msg,
+                    provider=ModelProvider.HUGGINGFACE_REMOTE,
+                    model_id=self.remote_provider.model,
+                )
+            elif "rate limit" in err_lower or "429" in err_lower:
+                mapped_err = RateLimitError(
+                    message=err_msg,
+                    provider=ModelProvider.HUGGINGFACE_REMOTE,
+                    model_id=self.remote_provider.model,
+                )
+            elif "timeout" in err_lower or "timed out" in err_lower:
+                mapped_err = ProviderTimeoutError(
+                    message=err_msg,
+                    provider=ModelProvider.HUGGINGFACE_REMOTE,
+                    model_id=self.remote_provider.model,
+                )
+            elif "security policy" in err_lower or "not allowed" in err_lower or "blocked" in err_lower:
+                mapped_err = SecurityViolationError(
+                    message=err_msg,
+                    provider=ModelProvider.HUGGINGFACE_REMOTE,
+                    model_id=self.remote_provider.model,
+                )
+            else:
+                mapped_err = ProviderUnavailableError(
+                    message=err_msg,
+                    provider=ModelProvider.HUGGINGFACE_REMOTE,
+                    model_id=self.remote_provider.model,
+                )
+            yield AIStreamChunk(
+                event_type=StreamEventType.ERROR,
+                error=mapped_err,
+                model_id=self.remote_provider.model,
+                provider=ModelProvider.HUGGINGFACE_REMOTE,
+                metadata={"error": str(mapped_err)},
+            )
+            raise mapped_err from exc
+        except httpx.TimeoutException as exc:
+            timeout_err = ProviderTimeoutError(
+                message=f"Hugging Face streaming timed out: {exc}",
+                provider=ModelProvider.HUGGINGFACE_REMOTE,
+                model_id=self.remote_provider.model,
+            )
+            yield AIStreamChunk(
+                event_type=StreamEventType.ERROR,
+                error=timeout_err,
+                model_id=self.remote_provider.model,
+                provider=ModelProvider.HUGGINGFACE_REMOTE,
+                metadata={"error": str(timeout_err)},
+            )
+            raise timeout_err from exc
+        except Exception as exc:
+            prov_err = ProviderUnavailableError(
+                message=f"Hugging Face streaming failed: {exc}",
+                provider=ModelProvider.HUGGINGFACE_REMOTE,
+                model_id=self.remote_provider.model,
+            )
+            yield AIStreamChunk(
+                event_type=StreamEventType.ERROR,
+                error=prov_err,
+                model_id=self.remote_provider.model,
+                provider=ModelProvider.HUGGINGFACE_REMOTE,
+                metadata={"error": str(prov_err)},
+            )
+            raise prov_err from exc
+        finally:
+            self.remote_provider.model = orig_model

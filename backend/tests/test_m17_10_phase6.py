@@ -38,6 +38,7 @@ from app.ai.health import ProviderHealthTracker
 from app.ai.models import TaskType
 from app.ai.ollama import OllamaProvider, OllamaUnavailableError
 from app.ai.privacy import PrivacyMode
+from app.ai.registry import ModelRegistry
 from app.ai.security import ModelSecurityPolicy
 from app.ai.router import ModelRouter, RouterConfig
 from app.ai.security_gateway import ModelSecurityGateway
@@ -103,8 +104,10 @@ def clean_isolated_unified():
     config = RouterConfig(fallback_enabled=True, max_fallback_depth=1)
     gateway = ModelSecurityGateway(security_policy=ModelSecurityPolicy())
     health_tracker = ProviderHealthTracker()
+    registry = ModelRegistry()
     router = ModelRouter(
         config=config,
+        registry=registry,
         security_policy=ModelSecurityPolicy(),
         telemetry=telemetry,
         health_tracker=health_tracker,
