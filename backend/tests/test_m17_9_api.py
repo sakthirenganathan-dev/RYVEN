@@ -748,6 +748,10 @@ def test_44_api_performance(memory_test_env: Dict[str, Any]):
     client: TestClient = memory_test_env["client"]
     _seed_sample_api_memories(memory_test_env["repo"], memory_test_env["security_service"])
 
+    # Warm up client / ASGI stack to amortize cold-start initialization
+    warmup_resp = client.get("/api/memory/search?q=warmup")
+    assert warmup_resp.status_code == 200
+
     t0 = time.perf_counter()
     resp = client.get("/api/memory/search?q=FastAPI")
     dur_ms = (time.perf_counter() - t0) * 1000
