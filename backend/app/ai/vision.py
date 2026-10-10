@@ -19,9 +19,10 @@ from pydantic import BaseModel, Field, field_validator
 
 from app.actions.event_bus import action_bus
 from app.actions.models import ActionEvent, ActionStatus, ActionType
+from app.ai.contracts import AIRequest, ModelProvider
 from app.ai.models import TaskType
 from app.ai.ollama import OllamaProvider, OllamaUnavailableError
-from app.ai.router import model_router
+from app.ai.router import ModelRouter, model_router
 from app.browser.security import BrowserSecurityValidator
 from app.core.logging_config import logger
 
@@ -100,31 +101,53 @@ class PerceptionResult(BaseModel):
 
 
 class VisionProvider:
-    """Wraps OllamaProvider for multimodal image+text requests.
+    """Wraps ModelRouter and OllamaProvider for multimodal image+text requests.
 
     Never invokes remote providers.
     Images are never logged or stored outside request scope.
     """
 
-    def __init__(self, model_id: str = "moondream") -> None:
+    def __init__(
+        self,
+        model_id: str = "moondream",
+        provider: Optional[OllamaProvider] = None,
+        router: Optional[ModelRouter] = None,
+    ) -> None:
         self._model_id = model_id
-        self._provider = OllamaProvider(model=model_id)
+        self._provider = provider or OllamaProvider(model=model_id)
+        self._router = router or model_router
 
     async def analyze_image(
         self,
         image_b64: str,
         prompt: str = "Describe this image and detect all visible UI elements and text.",
     ) -> str:
-        """Send image to local Ollama vision model; return raw text response.
+        """Send image to local Ollama vision model via authoritative ModelRouter; return raw text response.
 
         image_b64 is never written to logs or disk.
         """
-        response = await self._provider.generate(
+        req = AIRequest.from_prompt(
             prompt=prompt,
             system_prompt=_VISION_SYSTEM_PROMPT,
-            images=[image_b64],  # Never logged by OllamaProvider
+            model_id=self._model_id,
+            task_type=TaskType.VISION,
+            images=[image_b64],
         )
-        return response.content
+
+        adapter = self._router.get_adapter(ModelProvider.OLLAMA)
+        orig_provider = getattr(adapter, "provider", None)
+        try:
+            if hasattr(adapter, "provider"):
+                adapter.provider = self._provider
+            response = await self._router.execute(
+                request=req,
+                preferred_model_id=self._model_id,
+                allow_remote=False,
+            )
+            return response.content
+        finally:
+            if hasattr(adapter, "provider") and orig_provider is not None:
+                adapter.provider = orig_provider
 
 
 # ---------------------------------------------------------------------------

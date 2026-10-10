@@ -6,9 +6,18 @@ Local Hugging Face providers with deterministic routing, safety checks, and fall
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+import time
+from typing import Any, AsyncIterator, Dict, List, Optional
 from app.actions.event_bus import action_bus
 from app.actions.models import ActionEvent, ActionStatus, ActionType
+from app.ai.contracts import (
+    AIRequest,
+    AIStreamChunk,
+    ModelProvider,
+    ProviderTimeoutError,
+    ProviderUnavailableError,
+    RateLimitError,
+)
 from app.ai.grok import GrokProvider, GrokUnavailableError
 from app.ai.hf_local import HuggingFaceLocalProvider, HuggingFaceLocalUnavailableError
 from app.ai.hf_remote import HuggingFaceRemoteProvider, HuggingFaceRemoteUnavailableError
@@ -39,6 +48,24 @@ class UnifiedAIProvider(AIProvider):
         self.hf_remote = hf_remote_provider or HuggingFaceRemoteProvider()
         self.hf_local = hf_local_provider or HuggingFaceLocalProvider()
 
+        # Synchronize custom transports with router adapters if injected
+        if ollama_provider is not None:
+            from app.ai.adapters import OllamaAdapter
+            self.router.register_adapter(ModelProvider.OLLAMA, OllamaAdapter(self.ollama))
+        if grok_provider is not None:
+            from app.ai.adapters import GrokAdapter
+            self.router.register_adapter(ModelProvider.GROK, GrokAdapter(self.grok))
+        if hf_remote_provider is not None or hf_local_provider is not None:
+            from app.ai.adapters import HuggingFaceAdapter
+            self.router.register_adapter(
+                ModelProvider.HUGGINGFACE_REMOTE,
+                HuggingFaceAdapter(remote_provider=self.hf_remote, local_provider=self.hf_local, prefer_local=False),
+            )
+            self.router.register_adapter(
+                ModelProvider.HUGGINGFACE_LOCAL,
+                HuggingFaceAdapter(remote_provider=self.hf_remote, local_provider=self.hf_local, prefer_local=True),
+            )
+
         self._providers: Dict[str, AIProvider] = {
             "ollama": self.ollama,
             "grok": self.grok,
@@ -57,16 +84,25 @@ class UnifiedAIProvider(AIProvider):
         hf_remote_health = await self.hf_remote.check_health()
         hf_local_health = await self.hf_local.check_health()
 
+        # Augment with router health summary
+        router_health = self.router.health_tracker.get_health_summary()
+
+        ollama_online = bool(ollama_health.get("online", False))
+        ollama_model_avail = bool(ollama_health.get("model_available", False))
+
         return {
             "provider": self.provider_name,
             "active_default": "ollama",
-            "active_default_model": self.ollama.model,
+            "active_default_model": getattr(self.ollama, "model", "qwen2.5:7b"),
+            "online": ollama_online,
+            "model_available": ollama_model_avail,
             "providers": {
                 "ollama": ollama_health,
                 "grok": grok_health,
                 "huggingface_remote": hf_remote_health,
                 "huggingface_local": hf_local_health,
             },
+            "circuit_breakers": router_health,
         }
 
     async def generate(
@@ -79,95 +115,52 @@ class UnifiedAIProvider(AIProvider):
         preferred_model_id: Optional[str] = None,
         **kwargs: Any,
     ) -> AIResponse:
-        """Route prompt deterministically and execute with automated fallback chain."""
-        # 1. Determine model and provider routing
-        decision: RoutingDecision = await self.router.route(
-            task_type=task_type,
+        """Route prompt deterministically and execute via authoritative ModelRouter."""
+        req = AIRequest.from_prompt(
             prompt=prompt,
-            allow_remote=allow_remote,
+            system_prompt=system_prompt,
+            task_type=task_type,
+            model_id=preferred_model_id,
+            images=kwargs.pop("images", None),
+            **kwargs,
+        )
+        if messages:
+            req.messages = messages
+
+        return await self.router.execute(
+            request=req,
             preferred_model_id=preferred_model_id,
+            allow_remote=allow_remote,
         )
 
-        await action_bus.publish(
-            ActionEvent(
-                action_type=ActionType.MODEL_ROUTE_SELECTED,
-                status=ActionStatus.COMPLETED,
-                title=f"Route Selected: {decision.selected_model}",
-                description=f"Assigned {decision.provider} for {decision.task_type.value}: {decision.reason}",
-                safe_metadata={
-                    "selected_model": decision.selected_model,
-                    "provider": decision.provider,
-                    "task_type": decision.task_type.value,
-                    "local": decision.local_or_remote == "local",
-                    "reason": decision.reason,
-                },
-            )
+    async def stream(
+        self,
+        prompt: str,
+        system_prompt: Optional[str] = None,
+        messages: Optional[List[ChatMessage]] = None,
+        task_type: TaskType = TaskType.GENERAL_REASONING,
+        allow_remote: bool = False,
+        preferred_model_id: Optional[str] = None,
+        **kwargs: Any,
+    ) -> AsyncIterator[AIStreamChunk]:
+        """Stream response chunks incrementally via authoritative router."""
+        req = AIRequest.from_prompt(
+            prompt=prompt,
+            system_prompt=system_prompt,
+            task_type=task_type,
+            model_id=preferred_model_id,
+            stream=True,
+            **kwargs,
         )
+        if messages:
+            req.messages = messages
 
-        # 2. Select matching provider
-        provider_key = decision.provider.lower()
-        if "huggingface" in provider_key:
-            provider_key = "huggingface_remote" if decision.local_or_remote == "remote" else "huggingface_local"
-
-        target_provider = self._providers.get(provider_key, self.ollama)
-
-        # 3. Attempt execution with chosen provider
-        from app.runtime.concurrency import concurrency_controller
-        from app.runtime.performance import runtime_performance_service
-
-        try:
-            async with concurrency_controller.limit_llm():
-                async with runtime_performance_service.profile(
-                    name=f"llm_{decision.selected_model}",
-                    category="llm",
-                    provider=decision.provider,
-                    model=decision.selected_model,
-                ):
-                    return await target_provider.generate(
-                        prompt=prompt,
-                        system_prompt=system_prompt,
-                        messages=messages,
-                        **kwargs,
-                    )
-        except (
-            GrokUnavailableError,
-            HuggingFaceRemoteUnavailableError,
-            HuggingFaceLocalUnavailableError,
-            OllamaUnavailableError,
-        ) as exc:
-            logger.warning(
-                f"Provider '{decision.provider}' failed ({exc}). Initiating deterministic fallback chain."
-            )
-
-            # 4. Fallback Execution Chain
-            # If target provider was not Ollama, attempt local Ollama Qwen fallback
-            if target_provider != self.ollama:
-                logger.info(f"Falling back from '{decision.provider}' to default local Ollama Qwen.")
-                await action_bus.publish(
-                    ActionEvent(
-                        action_type=ActionType.MODEL_ROUTE_SELECTED,
-                        status=ActionStatus.PROGRESS,
-                        title="Model Provider Fallback",
-                        description=f"Provider {decision.provider} unavailable. Falling back to Ollama {self.ollama.model}",
-                        safe_metadata={"fallback_provider": "ollama", "fallback_model": self.ollama.model},
-                    )
-                )
-                async with concurrency_controller.limit_llm():
-                    async with runtime_performance_service.profile(
-                        name=f"llm_fallback_{self.ollama.model}",
-                        category="llm",
-                        provider="ollama",
-                        model=self.ollama.model,
-                    ):
-                        return await self.ollama.generate(
-                            prompt=prompt,
-                            system_prompt=system_prompt,
-                            messages=messages,
-                            **kwargs,
-                        )
-
-            # If Ollama itself was the target and failed, propagate the error
-            raise
+        async for chunk in self.router.stream(
+            request=req,
+            preferred_model_id=preferred_model_id,
+            allow_remote=allow_remote,
+        ):
+            yield chunk
 
 
 # Global default unified provider singleton

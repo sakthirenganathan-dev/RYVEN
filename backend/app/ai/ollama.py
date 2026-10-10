@@ -1,7 +1,7 @@
 """Ollama HTTP AI provider implementation for RYVEN."""
 
 import json
-from typing import Any, Dict, List, Optional
+from typing import Any, AsyncIterator, Dict, List, Optional
 import httpx
 from app.ai.provider import AIProvider, AIResponse, ChatMessage
 from app.core.config import settings
@@ -28,6 +28,43 @@ class OllamaProvider(AIProvider):
         self.base_url = (base_url or settings.ollama_base_url).rstrip("/")
         self.model = model or settings.ollama_model
         self.timeout_seconds = timeout_seconds or settings.ollama_timeout_seconds
+
+    def _build_payload_messages(
+        self,
+        prompt: str,
+        system_prompt: Optional[str] = None,
+        messages: Optional[List[ChatMessage]] = None,
+        images: Optional[List[str]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Construct structured messages list for Ollama /api/chat."""
+        payload_messages: List[Dict[str, Any]] = []
+
+        # 1. System prompt (always precedes conversation)
+        if system_prompt:
+            payload_messages.append({"role": "system", "content": system_prompt})
+
+        # 2. Conversation history if provided
+        if messages:
+            for msg in messages:
+                if msg.role == "system":
+                    continue
+                payload_messages.append({"role": msg.role, "content": msg.content})
+
+        # 3. Ensure the current prompt is appended as the latest user message
+        last_matches = (
+            payload_messages
+            and payload_messages[-1].get("role") == "user"
+            and payload_messages[-1].get("content") == prompt
+        )
+        if not last_matches:
+            user_message: Dict[str, Any] = {"role": "user", "content": prompt}
+            if images:
+                user_message["images"] = images
+            payload_messages.append(user_message)
+        elif images and payload_messages:
+            payload_messages[-1]["images"] = images  # type: ignore[index]
+
+        return payload_messages
 
     async def check_health(self) -> Dict[str, Any]:
         """Verify if Ollama service is online and the configured model is installed."""
@@ -87,37 +124,7 @@ class OllamaProvider(AIProvider):
                 "No Ollama model configured. Please set OLLAMA_MODEL in your environment."
             )
 
-        # Build structured messages payload
-        payload_messages: List[Dict[str, str]] = []
-
-        # 1. System prompt (always precedes conversation)
-        if system_prompt:
-            payload_messages.append({"role": "system", "content": system_prompt})
-
-        # 2. Conversation history if provided
-        if messages:
-            for msg in messages:
-                # Avoid duplicate system prompts
-                if msg.role == "system":
-                    continue
-                payload_messages.append({"role": msg.role, "content": msg.content})
-
-        # 3. Ensure the current prompt is appended as the latest user message
-        #    For vision requests, attach images to the user message (never logged).
-        last_matches = (
-            payload_messages
-            and payload_messages[-1].get("role") == "user"
-            and payload_messages[-1].get("content") == prompt
-        )
-        if not last_matches:
-            user_message: Dict[str, Any] = {"role": "user", "content": prompt}
-            if images:
-                # Images are base64 strings; passed directly, never written to logs
-                user_message["images"] = images
-            payload_messages.append(user_message)
-        elif images and payload_messages:
-            # Attach images to the existing final user message
-            payload_messages[-1]["images"] = images  # type: ignore[index]
+        payload_messages = self._build_payload_messages(prompt, system_prompt, messages, images)
 
         url = f"{self.base_url}/api/chat"
         payload: Dict[str, Any] = {
@@ -197,4 +204,80 @@ class OllamaProvider(AIProvider):
 
         except Exception as exc:
             logger.error(f"Unexpected error communicating with Ollama: {exc}", exc_info=True)
+            raise OllamaUnavailableError("RYVEN AI engine encountered an unexpected internal error.") from exc
+
+    async def stream(
+        self,
+        prompt: str,
+        system_prompt: Optional[str] = None,
+        messages: Optional[List[ChatMessage]] = None,
+        images: Optional[List[str]] = None,
+        **kwargs: Any,
+    ) -> AsyncIterator[Dict[str, Any]]:
+        """Send chat messages to Ollama /api/chat with stream=True and yield parsed JSON chunk records."""
+        if not self.model:
+            raise OllamaUnavailableError(
+                "No Ollama model configured. Please set OLLAMA_MODEL in your environment."
+            )
+
+        payload_messages = self._build_payload_messages(prompt, system_prompt, messages, images)
+
+        url = f"{self.base_url}/api/chat"
+        payload: Dict[str, Any] = {
+            "model": self.model,
+            "messages": payload_messages,
+            "stream": True,
+        }
+
+        if kwargs:
+            payload["options"] = kwargs
+
+        logger.info(
+            f"Dispatching streaming chat request to Ollama ({self.base_url}) using model '{self.model}' with {len(payload_messages)} message(s)"
+        )
+
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
+                async with client.stream("POST", url, json=payload) as response:
+                    if response.status_code == 404:
+                        err_msg = f"Model '{self.model}' is not available on Ollama server. Run 'ollama pull {self.model}'."
+                        logger.error(err_msg)
+                        raise OllamaUnavailableError(err_msg)
+
+                    if response.status_code != 200:
+                        err_bytes = await response.aread()
+                        err_text = err_bytes.decode("utf-8", errors="replace")
+                        logger.error(f"Ollama returned HTTP {response.status_code}: {err_text}")
+                        raise OllamaUnavailableError(
+                            f"Ollama server error (HTTP {response.status_code})."
+                        )
+
+                    async for line in response.aiter_lines():
+                        line_str = line.strip()
+                        if not line_str:
+                            continue
+                        try:
+                            data = json.loads(line_str)
+                            yield data
+                        except Exception as json_err:
+                            logger.warning(f"Malformed JSON from Ollama stream line: {json_err}")
+                            continue
+
+        except httpx.ConnectError as exc:
+            logger.error(f"Cannot connect to Ollama at {self.base_url}: {exc}")
+            raise OllamaUnavailableError(
+                f"RYVEN AI engine is currently offline: Ollama service at {self.base_url} is unreachable. Ensure Ollama is running."
+            ) from exc
+
+        except httpx.TimeoutException as exc:
+            logger.error(f"Ollama stream timed out after {self.timeout_seconds}s: {exc}")
+            raise OllamaUnavailableError(
+                f"RYVEN AI engine request timed out after {self.timeout_seconds} seconds."
+            ) from exc
+
+        except OllamaUnavailableError:
+            raise
+
+        except Exception as exc:
+            logger.error(f"Unexpected error streaming from Ollama: {exc}", exc_info=True)
             raise OllamaUnavailableError("RYVEN AI engine encountered an unexpected internal error.") from exc

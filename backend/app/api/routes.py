@@ -1,8 +1,11 @@
-"""FastAPI endpoints for RYVEN."""
-
-from typing import Any, Dict, List, Optional
-from fastapi import APIRouter, Depends, Request
+import os
+import secrets
+import threading
+import time
+from typing import Any, Dict, List, Optional, Tuple
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
 from app.core.assistant import Assistant
 from app.core.config import settings
 from app.core.logging_config import logger
@@ -649,6 +652,261 @@ async def get_models_route_endpoint(
         "fallback": decision.fallback,
         "memory_estimate_gb": decision.memory_estimate_gb,
     }
+
+
+@router.get("/v1/models/telemetry")
+@router.get("/models/telemetry")
+async def get_models_telemetry_endpoint() -> Dict[str, Any]:
+    """Retrieve privacy-preserving operational telemetry and performance governance summary."""
+    from app.ai.telemetry import model_telemetry_service
+    return model_telemetry_service.get_summary()
+
+
+@router.get("/v1/models/telemetry/events")
+@router.get("/models/telemetry/events")
+async def get_models_telemetry_events_endpoint(
+    limit: int = 50,
+    event_type: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """Retrieve bounded sanitized recent telemetry audit events without secrets or prompt text."""
+    from app.ai.telemetry import model_telemetry_service
+    return model_telemetry_service.get_events(limit=limit, event_type=event_type)
+
+
+# --------------------------------------------------------------------------
+# M17.11 / M17.11.1 BENCHMARK RATE LIMITER & ACCESS CONTROLS
+# --------------------------------------------------------------------------
+
+class BenchmarkRateLimiter:
+    """Thread-safe, process-local bounded sliding-window rate limiter for benchmark endpoints.
+
+    Invariants:
+    1. Tracks invocation timestamps per (endpoint, client_id) in memory.
+    2. Bounded to a maximum number of tracked keys to prevent memory exhaustion.
+    3. Prunes stale timestamps outside the sliding window.
+    4. Process-local: this in-memory limiter applies per FastAPI process instance.
+    """
+
+    def __init__(self, max_tracked_entries: int = 1000) -> None:
+        self._lock = threading.Lock()
+        self._calls: Dict[str, List[float]] = {}
+        self._max_entries = max_tracked_entries
+
+    def check_rate_limit(
+        self, client_id: str, endpoint: str, max_requests: int, window_seconds: float
+    ) -> Tuple[bool, float]:
+        """Check if request is permitted within the sliding window.
+
+        Returns:
+            (allowed: bool, retry_after_seconds: float)
+        """
+        now = time.monotonic()
+        key = f"{endpoint}:{client_id}"
+        with self._lock:
+            if len(self._calls) > self._max_entries:
+                stale_keys = [
+                    k for k, ts in self._calls.items()
+                    if not ts or (now - ts[-1] > window_seconds * 2)
+                ]
+                for sk in stale_keys:
+                    self._calls.pop(sk, None)
+
+            timestamps = self._calls.setdefault(key, [])
+            cutoff = now - window_seconds
+            self._calls[key] = [t for t in timestamps if t > cutoff]
+            timestamps = self._calls[key]
+
+            if len(timestamps) >= max_requests:
+                earliest = timestamps[0]
+                retry_after = max(1.0, round(window_seconds - (now - earliest), 1))
+                return False, retry_after
+
+            timestamps.append(now)
+            return True, 0.0
+
+
+benchmark_rate_limiter = BenchmarkRateLimiter()
+
+
+def verify_benchmark_access(request: Request) -> None:
+    """Authenticate and authorize caller for benchmark execution and calibration.
+
+    Safeguards (M17.11.1 / M17.11.1.1 Fail-Closed):
+    1. Resolve configured server token from settings.benchmark_admin_token or environment.
+       If the token is missing, None, or blank/whitespace, immediately reject with
+       HTTP 401 Unauthorized (fail closed). Do NOT fall through to loopback validation.
+    2. If the token is configured, require a valid 'Authorization: Bearer <token>'
+       or 'X-Benchmark-Token' header. Secrets are compared strictly using constant-time
+       secrets.compare_digest. Tokens are NEVER logged, printed, or included in errors.
+    3. After successful token verification, enforce defense-in-depth loopback and
+       Origin/Referer restrictions. Non-loopback or disallowed origins are rejected with 403.
+    """
+    admin_token = getattr(settings, "benchmark_admin_token", None)
+    if admin_token is None:
+        admin_token = os.getenv("RYVEN_BENCHMARK_TOKEN") or os.getenv("RYVEN_ADMIN_TOKEN")
+    if not admin_token or not admin_token.strip():
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Unauthorized: Benchmark administration token is not configured on server (fail-closed enforcement).",
+        )
+
+    auth_header = request.headers.get("Authorization", "")
+    token_header = request.headers.get("X-Benchmark-Token", "")
+    provided = ""
+    if auth_header.lower().startswith("bearer "):
+        provided = auth_header[7:].strip()
+    elif token_header:
+        provided = token_header.strip()
+
+    if not provided or not secrets.compare_digest(provided, admin_token.strip()):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Unauthorized: Missing or invalid benchmark authorization token.",
+        )
+
+    # Additional defense-in-depth: loopback caller validation
+    client_host = request.client.host if request.client else "unknown"
+    trusted_hosts = {"127.0.0.1", "::1", "localhost", "testclient"}
+    if client_host not in trusted_hosts:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Forbidden: External caller host '{client_host}' is not authorized for model benchmark.",
+        )
+
+    # Validate Origin/Referer if provided
+    origin = request.headers.get("Origin") or request.headers.get("Referer")
+    if origin:
+        from urllib.parse import urlparse
+        parsed = urlparse(origin)
+        origin_host = parsed.hostname or ""
+        if origin_host not in trusted_hosts and not any(origin.startswith(ao) for ao in settings.allowed_origins):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Forbidden: Untrusted caller origin for model benchmark.",
+            )
+
+
+class BenchmarkRunRequest(BaseModel):
+    """Payload to trigger synthetic benchmark execution."""
+    allow_cloud: bool = False
+    samples_per_task: int = Field(default=1, ge=1, le=3)
+    confirmation_token: Optional[str] = None
+
+
+@router.post("/v1/models/benchmark/run", dependencies=[Depends(verify_benchmark_access)])
+@router.post("/models/benchmark/run", dependencies=[Depends(verify_benchmark_access)])
+async def run_models_benchmark_endpoint(
+    request: Request,
+    payload: Optional[BenchmarkRunRequest] = None,
+) -> Dict[str, Any]:
+    """Execute bounded single-flight synthetic benchmark across local and authorized cloud models."""
+    from app.ai.benchmark import model_benchmark_engine
+    from app.ai.router import model_router
+
+    if model_benchmark_engine.is_running:
+        raise HTTPException(
+            status_code=409,
+            detail="A benchmark execution is already in flight. Concurrent runs are forbidden.",
+        )
+
+    # Process-local rate limit check: max 1 benchmark run per 60 seconds
+    client_id = request.client.host if request.client else "unknown"
+    allowed, retry_after = benchmark_rate_limiter.check_rate_limit(
+        client_id=client_id, endpoint="run", max_requests=1, window_seconds=60.0
+    )
+    if not allowed:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Benchmark execution rate limit exceeded. Retry after {int(retry_after)} seconds.",
+            headers={"Retry-After": str(int(retry_after))},
+        )
+
+    data = payload or BenchmarkRunRequest()
+    allow_cloud = data.allow_cloud
+    samples_per_task = max(1, min(data.samples_per_task, 3))
+
+    adapters: Dict[str, Any] = {}
+    try:
+        adapters["OLLAMA"] = model_router.get_adapter("OLLAMA")
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Local Ollama adapter unavailable: {exc}")
+
+    if allow_cloud:
+        try:
+            adapters["HUGGINGFACE_REMOTE"] = model_router.get_adapter("HUGGINGFACE_REMOTE")
+        except Exception:
+            try:
+                adapters["HUGGINGFACE"] = model_router.get_adapter("HUGGINGFACE")
+            except Exception as hf_exc:
+                logger.warning(f"Cloud Hugging Face adapter not available for benchmark: {hf_exc}")
+
+    try:
+        summaries = await model_benchmark_engine.run_benchmark(
+            adapters=adapters,
+            samples_per_task=samples_per_task,
+            allow_cloud=allow_cloud,
+            confirmation_token=data.confirmation_token,
+        )
+        recommendation = model_benchmark_engine.get_latest_recommendation()
+        return {
+            "status": "completed",
+            "samples_per_task": samples_per_task,
+            "allow_cloud": allow_cloud,
+            "summaries": {k: v.model_dump() for k, v in summaries.items()},
+            "recommendation": recommendation.model_dump(),
+        }
+    except RuntimeError as r_err:
+        raise HTTPException(status_code=409, detail=str(r_err))
+    except Exception as exc:
+        logger.error(f"Benchmark execution error: {exc}")
+        raise HTTPException(status_code=500, detail=f"Benchmark execution failed: {str(exc)[:100]}")
+
+
+@router.get("/v1/models/benchmark/results", dependencies=[Depends(verify_benchmark_access)])
+@router.get("/models/benchmark/results", dependencies=[Depends(verify_benchmark_access)])
+async def get_models_benchmark_results_endpoint(request: Request) -> Dict[str, Any]:
+    """Retrieve latest benchmark metric summaries and execution status."""
+    from app.ai.benchmark import model_benchmark_engine
+
+    # Rate limit check: max 30 results requests per 60 seconds
+    client_id = request.client.host if request.client else "unknown"
+    allowed, retry_after = benchmark_rate_limiter.check_rate_limit(
+        client_id=client_id, endpoint="results", max_requests=30, window_seconds=60.0
+    )
+    if not allowed:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Benchmark results rate limit exceeded. Retry after {int(retry_after)} seconds.",
+            headers={"Retry-After": str(int(retry_after))},
+        )
+
+    return {
+        "is_running": model_benchmark_engine.is_running,
+        "sample_count": len(model_benchmark_engine.get_samples()),
+        "summaries": {k: v.model_dump() for k, v in model_benchmark_engine.get_summaries().items()},
+        "recommendation": model_benchmark_engine.get_latest_recommendation().model_dump(),
+    }
+
+
+@router.get("/v1/models/benchmark/calibration", dependencies=[Depends(verify_benchmark_access)])
+@router.get("/models/benchmark/calibration", dependencies=[Depends(verify_benchmark_access)])
+async def get_models_benchmark_calibration_endpoint(request: Request) -> Dict[str, Any]:
+    """Retrieve current routing calibration recommendation derived from benchmark evidence."""
+    from app.ai.benchmark import model_benchmark_engine
+
+    # Rate limit check: max 5 calibration requests per 60 seconds
+    client_id = request.client.host if request.client else "unknown"
+    allowed, retry_after = benchmark_rate_limiter.check_rate_limit(
+        client_id=client_id, endpoint="calibration", max_requests=5, window_seconds=60.0
+    )
+    if not allowed:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Benchmark calibration rate limit exceeded. Retry after {int(retry_after)} seconds.",
+            headers={"Retry-After": str(int(retry_after))},
+        )
+
+    return model_benchmark_engine.get_latest_recommendation().model_dump()
 
 
 # --------------------------------------------------------------------------

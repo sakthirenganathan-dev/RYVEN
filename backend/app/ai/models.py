@@ -31,6 +31,12 @@ class ModelProvider(str, Enum):
     OLLAMA = "OLLAMA"
     HUGGINGFACE_LOCAL = "HUGGINGFACE_LOCAL"
     HUGGINGFACE_REMOTE = "HUGGINGFACE_REMOTE"
+    GROK = "GROK"
+
+    def __eq__(self, other: Any) -> bool:
+        if isinstance(other, str):
+            return self.value.lower() == other.lower()
+        return super().__eq__(other)
 
 
 class ModelProfile(BaseModel):
@@ -51,6 +57,14 @@ class ModelProfile(BaseModel):
     description: str = Field(default="", description="Human-readable model summary")
 
 
+class ComplexityTier(str, Enum):
+    """Task complexity classification determined deterministically."""
+
+    LOW = "LOW"
+    MEDIUM = "MEDIUM"
+    HIGH = "HIGH"
+
+
 class RoutingDecision(BaseModel):
     """Explainable decision produced by the ModelRouter."""
 
@@ -62,3 +76,18 @@ class RoutingDecision(BaseModel):
     remote_allowed: bool = Field(default=False, description="Whether remote inference was authorized")
     local_or_remote: Literal["local", "remote"] = Field("local", description="Boundary of the chosen model")
     memory_estimate_gb: float = Field(default=0.0, description="Estimated memory impact")
+
+    # M17.10 Phase 3 Extended Routing Metadata
+    reason_code: str = Field(default="LOCAL_DEFAULT", description="Stable machine-readable routing reason code")
+    fallback_eligible: bool = Field(default=True, description="Whether fallback is permitted on eligible provider failure")
+    fallback_model: Optional[str] = Field(default="qwen2.5:7b", description="Explicit fallback model ID")
+    fallback_provider: Optional[str] = Field(default="OLLAMA", description="Explicit fallback provider")
+    estimated_complexity: str = Field(default="LOW", description="Deterministic complexity estimate: LOW, MEDIUM, HIGH")
+    context_size_requirement: int = Field(default=4096, description="Estimated context window in tokens")
+    latency_sensitive: bool = Field(default=False, description="Whether low latency is prioritized")
+    health_summary: Optional[Dict[str, Any]] = Field(default=None, description="Sanitized health summary of chosen provider")
+
+    # M17.11 Benchmark Calibration Metadata
+    calibration_recommendation: Optional[Dict[str, Any]] = Field(default=None, description="Benchmark calibration recommendation if available")
+    adaptive_routing_active: bool = Field(default=False, description="Whether adaptive routing based on benchmark metrics was applied")
+

@@ -123,6 +123,26 @@ class ModelRegistry:
                 priority=100,
                 description="Remote cloud Hugging Face inference endpoint (Opt-in only)",
             ),
+            # 6. Remote Grok Model (Strictly Disabled by default, Opt-in only)
+            ModelProfile(
+                id="grok-2-latest",
+                provider=ModelProvider.GROK,
+                task_types=[
+                    TaskType.GENERAL_REASONING,
+                    TaskType.PLANNING,
+                    TaskType.CODE,
+                ],
+                local_or_remote="remote",
+                model_name="grok-2-latest",
+                capabilities=["chat", "streaming", "deep_reasoning"],
+                memory_estimate_gb=0.0,
+                context_length=131072,
+                enabled=False,  # STRICTLY DISABLED BY DEFAULT
+                installed=False,
+                sensitive_data_allowed=False,  # NEVER ALLOWED SENSITIVE DATA
+                priority=100,
+                description="Remote cloud xAI Grok inference endpoint (Opt-in only)",
+            ),
         ]
         for p in defaults:
             self._models[p.id] = p
