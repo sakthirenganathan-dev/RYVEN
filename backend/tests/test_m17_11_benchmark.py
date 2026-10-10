@@ -53,6 +53,7 @@ from app.ai.contracts import (
 )
 from app.ai.models import TaskType
 from app.ai.privacy import PrivacyMode
+from app.core.config import settings
 from app.ai.security import ModelSecurityPolicy
 
 
@@ -783,23 +784,25 @@ async def test_api_models_benchmark_results_and_calibration():
     from httpx import ASGITransport, AsyncClient
     from app.main import app
 
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        # Results
-        res = await client.get("/api/v1/models/benchmark/results")
-        assert res.status_code == 200
-        data = res.json()
-        assert "is_running" in data
-        assert "sample_count" in data
-        assert "summaries" in data
-        assert "recommendation" in data
+    auth_headers = {"Authorization": "Bearer test-m17-11-token"}
+    with patch.object(settings, "benchmark_admin_token", "test-m17-11-token"):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            # Results
+            res = await client.get("/api/v1/models/benchmark/results", headers=auth_headers)
+            assert res.status_code == 200
+            data = res.json()
+            assert "is_running" in data
+            assert "sample_count" in data
+            assert "summaries" in data
+            assert "recommendation" in data
 
-        # Calibration
-        res_cal = await client.get("/api/v1/models/benchmark/calibration")
-        assert res_cal.status_code == 200
-        cal_data = res_cal.json()
-        assert "recommended_default_provider" in cal_data
-        assert "cloud_delegation_justified" in cal_data
+            # Calibration
+            res_cal = await client.get("/api/v1/models/benchmark/calibration", headers=auth_headers)
+            assert res_cal.status_code == 200
+            cal_data = res_cal.json()
+            assert "recommended_default_provider" in cal_data
+            assert "cloud_delegation_justified" in cal_data
 
 
 @pytest.mark.asyncio
@@ -820,18 +823,21 @@ async def test_api_models_benchmark_run_endpoint():
         )
     }
 
-    with patch.object(model_benchmark_engine, "run_benchmark", new=AsyncMock(return_value=mock_summary)):
-        transport = ASGITransport(app=app)
-        async with AsyncClient(transport=transport, base_url="http://test") as client:
-            res = await client.post(
-                "/api/v1/models/benchmark/run",
-                json={"allow_cloud": False, "samples_per_task": 1},
-            )
-            assert res.status_code == 200
-            data = res.json()
-            assert data["status"] == "completed"
-            assert "summaries" in data
-            assert "recommendation" in data
+    auth_headers = {"Authorization": "Bearer test-m17-11-token"}
+    with patch.object(settings, "benchmark_admin_token", "test-m17-11-token"):
+        with patch.object(model_benchmark_engine, "run_benchmark", new=AsyncMock(return_value=mock_summary)):
+            transport = ASGITransport(app=app)
+            async with AsyncClient(transport=transport, base_url="http://test") as client:
+                res = await client.post(
+                    "/api/v1/models/benchmark/run",
+                    json={"allow_cloud": False, "samples_per_task": 1},
+                    headers=auth_headers,
+                )
+                assert res.status_code == 200
+                data = res.json()
+                assert data["status"] == "completed"
+                assert "summaries" in data
+                assert "recommendation" in data
 
 
 @pytest.mark.asyncio
@@ -841,12 +847,15 @@ async def test_api_models_benchmark_rejects_concurrent_runs():
     from app.main import app
     from app.ai.benchmark import model_benchmark_engine
 
-    with patch.object(BenchmarkEngine, "is_running", new=True):
-        transport = ASGITransport(app=app)
-        async with AsyncClient(transport=transport, base_url="http://test") as client:
-            res = await client.post(
-                "/api/v1/models/benchmark/run",
-                json={"allow_cloud": False},
-            )
-            assert res.status_code == 409
-            assert "already in flight" in res.json()["detail"].lower()
+    auth_headers = {"Authorization": "Bearer test-m17-11-token"}
+    with patch.object(settings, "benchmark_admin_token", "test-m17-11-token"):
+        with patch.object(BenchmarkEngine, "is_running", new=True):
+            transport = ASGITransport(app=app)
+            async with AsyncClient(transport=transport, base_url="http://test") as client:
+                res = await client.post(
+                    "/api/v1/models/benchmark/run",
+                    json={"allow_cloud": False},
+                    headers=auth_headers,
+                )
+                assert res.status_code == 409
+                assert "already in flight" in res.json()["detail"].lower()

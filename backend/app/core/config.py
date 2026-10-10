@@ -75,6 +75,13 @@ class Settings(BaseModel):
         default_factory=lambda: os.getenv("ALLOW_REMOTE_AI_INFERENCE", "false").lower() in ("true", "1", "yes")
     )
 
+    # Benchmark Administration & Hardening (M17.11.1)
+    benchmark_admin_token: str | None = Field(
+        default_factory=lambda: (
+            os.getenv("RYVEN_BENCHMARK_TOKEN") or os.getenv("RYVEN_ADMIN_TOKEN")
+        )
+    )
+
     # Conversation Context
     max_history_messages: int = Field(
         default_factory=lambda: int(os.getenv("MAX_HISTORY_MESSAGES", "20"))

@@ -198,6 +198,115 @@ def _extract_json_block(content: str) -> str:
     return content.strip()
 
 
+# Zero-execution bounds (M17.11.1)
+MAX_BENCHMARK_SOURCE_LENGTH: int = 8192  # 8 KB maximum source limit
+MAX_BENCHMARK_AST_NODES: int = 500       # 500-node AST complexity limit
+
+
+def _evaluate_python_ast_static(clean_text: str, v_payload: Dict[str, Any]) -> Tuple[float, str]:
+    """Deterministically evaluate model-generated Python code using zero-execution AST checks.
+
+    Invariants:
+    1. NEVER executes exec(), eval(), compile(), or subprocess.
+    2. Enforces strict 8 KB source size limit and 500-node AST limit.
+    3. Handles syntax and parse errors gracefully without raising or leaking.
+    4. Evaluates structural allowlists for known synthetic benchmark tasks only.
+    5. Returns (0.0, explanation) for any unsupported, unknown, or anomalous code structure.
+    """
+    code_str = _extract_code_block(clean_text, language="python")
+    if not code_str or not code_str.strip():
+        return 0.0, "Empty or missing Python code block"
+
+    # 1. Enforce 8 KB source size limit
+    if len(code_str) > MAX_BENCHMARK_SOURCE_LENGTH:
+        return 0.0, f"Python source code exceeds maximum length limit of {MAX_BENCHMARK_SOURCE_LENGTH} bytes"
+
+    # 2. Parse AST safely
+    try:
+        tree = ast.parse(code_str)
+    except SyntaxError as syn_err:
+        return 0.0, f"Python SyntaxError: {syn_err.msg or 'invalid syntax'}"
+    except Exception as parse_err:
+        return 0.0, f"Python AST parse error: {str(parse_err)[:100]}"
+
+    # 3. Enforce 500-node AST complexity limit
+    node_count = sum(1 for _ in ast.walk(tree))
+    if node_count > MAX_BENCHMARK_AST_NODES:
+        return 0.0, f"Python AST complexity exceeds limit ({node_count} > {MAX_BENCHMARK_AST_NODES} nodes)"
+
+    func_name = v_payload.get("func_name", "")
+    if not func_name:
+        return 0.0, "No target function name specified in verification payload"
+
+    # Locate top-level target function definition
+    target_func: Optional[ast.FunctionDef] = None
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef) and node.name == func_name:
+            target_func = node
+            break
+
+    if target_func is None:
+        return 0.0, f"Expected callable function '{func_name}' not defined in output"
+
+    # 4. Allowlisted structural checks per synthetic task rubric
+    if func_name == "multiply":
+        # Rubric: 2 positional parameters, returns multiplication of parameters
+        params = [a.arg for a in target_func.args.args]
+        if len(params) != 2:
+            return 0.0, f"Function 'multiply' expected 2 parameters, found {len(params)}"
+
+        returns = [n for n in ast.walk(target_func) if isinstance(n, ast.Return)]
+        if not returns:
+            return 0.0, "Function 'multiply' has no return statement"
+
+        valid_mult = False
+        for ret in returns:
+            if ret.value and isinstance(ret.value, ast.BinOp) and isinstance(ret.value.op, ast.Mult):
+                left_id = ret.value.left.id if isinstance(ret.value.left, ast.Name) else None
+                right_id = ret.value.right.id if isinstance(ret.value.right, ast.Name) else None
+                if left_id and right_id and {left_id, right_id} == set(params):
+                    valid_mult = True
+                    break
+
+        if valid_mult:
+            return 1.0, "Verified pure multiply function definition via deterministic AST analysis"
+        return 0.0, "Function 'multiply' does not return a multiplication binary operation of its declared arguments"
+
+    elif func_name == "take_first_n":
+        # Rubric: 2 parameters (items, n), returns slice items[:n] without subtraction bug
+        params = [a.arg for a in target_func.args.args]
+        if len(params) != 2:
+            return 0.0, f"Function 'take_first_n' expected 2 parameters, found {len(params)}"
+
+        list_param, bound_param = params[0], params[1]
+        returns = [n for n in ast.walk(target_func) if isinstance(n, ast.Return)]
+        if not returns:
+            return 0.0, "Function 'take_first_n' has no return statement"
+
+        has_corrected_slice = False
+        for ret in returns:
+            if ret.value and isinstance(ret.value, ast.Subscript):
+                # Target must be the first parameter identifier
+                if not isinstance(ret.value.value, ast.Name) or ret.value.value.id != list_param:
+                    continue
+
+                sl = ret.value.slice
+                # Slice in Python 3.9+ AST
+                if isinstance(sl, ast.Slice):
+                    # Off-by-one bug was: n - 1 (BinOp with Sub). Corrected is: n without Sub.
+                    has_sub = any(isinstance(sub_node, ast.Sub) for sub_node in ast.walk(sl))
+                    if not has_sub and isinstance(sl.upper, ast.Name) and sl.upper.id == bound_param:
+                        has_corrected_slice = True
+                        break
+
+        if has_corrected_slice:
+            return 1.0, f"Verified corrected slice {list_param}[:{bound_param}] without off-by-one subtraction via deterministic AST analysis"
+        return 0.0, f"Function 'take_first_n' does not return corrected slice of '{list_param}' bounded by '{bound_param}'"
+
+    # Any unknown or unsupported task receives score 0.0
+    return 0.0, f"Unsupported or unknown AST evaluation rubric for function '{func_name}'"
+
+
 def evaluate_task_response(task: BenchmarkTask, response_text: str) -> Tuple[float, str]:
     """Deterministically score an output against task rubrics.
     
@@ -243,67 +352,12 @@ def evaluate_task_response(task: BenchmarkTask, response_text: str) -> Tuple[flo
         except Exception as exc:
             return 0.0, f"Invalid JSON syntax: {str(exc)[:100]}"
 
-    # 3. Safe Python Unit Test Execution
-    elif v_type == "python_unit_test":
-        code_str = _extract_code_block(clean_text, language="python")
-        try:
-            # Check for valid AST syntax
-            ast.parse(code_str)
-        except SyntaxError as syn_err:
-            return 0.0, f"Python SyntaxError: {syn_err}"
+    # 3. Deterministic Python AST Static Validation (Zero-Execution)
+    elif v_type in ("python_ast_static", "python_unit_test"):
+        return _evaluate_python_ast_static(clean_text, v_payload)
 
-        # Sandbox namespace: deny builtins that perform I/O or system access
-        safe_builtins = {
-            "range": range,
-            "len": len,
-            "int": int,
-            "float": float,
-            "str": str,
-            "bool": bool,
-            "list": list,
-            "dict": dict,
-            "set": set,
-            "tuple": tuple,
-            "min": min,
-            "max": max,
-            "sum": sum,
-            "abs": abs,
-            "round": round,
-            "print": lambda *args: None,
-        }
-        safe_globals = {"__builtins__": safe_builtins}
-        safe_locals: Dict[str, Any] = {}
-
-        try:
-            exec(code_str, safe_globals, safe_locals)  # pylint: disable=exec-used
-        except Exception as exec_err:
-            return 0.0, f"Execution failed on function definition: {exec_err}"
-
-        func_name = v_payload.get("func_name", "")
-        func = safe_locals.get(func_name) or safe_globals.get(func_name)
-        if not callable(func):
-            return 0.0, f"Expected callable function '{func_name}' not defined in output"
-
-        test_cases = v_payload.get("test_cases", [])
-        if not test_cases:
-            return 1.0, "Function defined and syntactically valid"
-
-        passed_cases = 0
-        for tc in test_cases:
-            args = tc.get("args", [])
-            expected = tc.get("expected")
-            try:
-                res = func(*args)
-                if res == expected:
-                    passed_cases += 1
-            except Exception:
-                pass
-
-        score = round(passed_cases / len(test_cases), 2)
-        return score, f"Passed {passed_cases}/{len(test_cases)} unit tests"
-
-    # Default fallback
-    return 0.5, "Task completed with unrecognized verification type"
+    # Default fallback: unknown or unsupported verification types receive 0.0
+    return 0.0, f"Unsupported or unrecognized verification type '{v_type}'"
 
 
 # ============================================================================
@@ -546,17 +600,17 @@ class BenchmarkEngine:
 
         async with self._lock:
             self._is_running = True
-            await action_bus.publish(
-                ActionEvent(
-                    action_type=ActionType.MODEL_BENCHMARK_STARTED,
-                    status=ActionStatus.STARTED,
-                    title="Model Benchmark Run Started",
-                    description=f"Running synthetic evaluation suite (tasks={len(active_tasks)}, samples={bounded_samples})",
-                    safe_metadata={"task_count": len(active_tasks), "samples_per_task": bounded_samples},
-                )
-            )
-
             try:
+                await action_bus.publish(
+                    ActionEvent(
+                        action_type=ActionType.MODEL_BENCHMARK_STARTED,
+                        status=ActionStatus.STARTED,
+                        title="Model Benchmark Run Started",
+                        description=f"Running synthetic evaluation suite (tasks={len(active_tasks)}, samples={bounded_samples})",
+                        safe_metadata={"task_count": len(active_tasks), "samples_per_task": bounded_samples},
+                    )
+                )
+
                 for prov_key, adapter in adapters.items():
                     prov_upper = prov_key.upper()
                     is_remote = "REMOTE" in prov_upper or "GROK" in prov_upper or "HUGGINGFACE" in prov_upper and getattr(adapter, "prefer_local", True) is False
