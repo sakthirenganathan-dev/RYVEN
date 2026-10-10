@@ -218,8 +218,8 @@ export function ModelStatusPanel() {
             <div className="border border-border/40 p-1.5 bg-background/60">
               <div className="text-muted-foreground text-[8px]">PRIMARY LATENCY (AVG/P95)</div>
               <div className="font-semibold text-foreground mt-0.5">
-                {telemetry?.providers?.ollama?.latency?.avg_ms != null
-                  ? `${telemetry.providers.ollama.latency.avg_ms}ms · ${telemetry.providers.ollama.latency.p95_ms}ms`
+                {telemetry?.providers?.["ollama"]?.latency?.avg_ms != null
+                  ? `${telemetry.providers["ollama"]?.latency?.avg_ms}ms · ${telemetry.providers["ollama"]?.latency?.p95_ms}ms`
                   : "NO SAMPLES"}
               </div>
             </div>
@@ -227,8 +227,8 @@ export function ModelStatusPanel() {
             <div className="border border-border/40 p-1.5 bg-background/60">
               <div className="text-muted-foreground text-[8px]">STREAM TTFT (FIRST TOKEN)</div>
               <div className="font-semibold text-foreground mt-0.5">
-                {telemetry?.providers?.ollama?.first_token_latency?.avg_ms != null
-                  ? `${telemetry.providers.ollama.first_token_latency.avg_ms}ms`
+                {telemetry?.providers?.["ollama"]?.first_token_latency?.avg_ms != null
+                  ? `${telemetry.providers["ollama"]?.first_token_latency?.avg_ms}ms`
                   : "NO STREAM DATA"}
               </div>
             </div>
