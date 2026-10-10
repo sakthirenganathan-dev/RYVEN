@@ -103,9 +103,19 @@ class OllamaAdapter(ProviderAdapter):
                     completion_tokens=eval_count,
                 )
 
+            resp_model = getattr(legacy_resp, "model", None)
+            if not isinstance(resp_model, str):
+                resp_model = getattr(self.provider, "model", "qwen2.5:7b")
+            if not isinstance(resp_model, str):
+                resp_model = "qwen2.5:7b"
+
+            resp_content = getattr(legacy_resp, "content", "")
+            if not isinstance(resp_content, str):
+                resp_content = str(resp_content)
+
             return AIResponse(
-                content=legacy_resp.content,
-                model_id=legacy_resp.model,
+                content=resp_content,
+                model_id=resp_model,
                 provider=ModelProvider.OLLAMA,
                 finish_reason="stop",
                 usage=usage,

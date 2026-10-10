@@ -753,9 +753,15 @@ class ModelRouter:
             health_summary=self.health_tracker.get_health_summary(ModelProvider.OLLAMA),
         )
 
-    # ========================================================================
-    # EXECUTION BOUNDARY WITH GATEWAY & CONTROLLED FALLBACK
-    # ========================================================================
+    def _safe_telemetry(self, method_name: str, *args: Any, **kwargs: Any) -> Any:
+        """Execute telemetry method safely without allowing telemetry failures to crash inference."""
+        try:
+            fn = getattr(self.telemetry, method_name, None)
+            if callable(fn):
+                return fn(*args, **kwargs)
+        except Exception as exc:
+            logger.warning(f"[ROUTER_TELEMETRY] {method_name} failed: {exc}")
+        return None
 
     async def execute(
         self,
@@ -770,7 +776,8 @@ class ModelRouter:
 
         # Telemetry: start logical request tracking
         cfg_mode_val = (self.config.privacy_mode.value if hasattr(self.config.privacy_mode, "value") else str(self.config.privacy_mode))
-        self.telemetry.start_request(
+        self._safe_telemetry(
+            "start_request",
             request_id=req_id,
             task_type=task_type.value,
             privacy_mode=cfg_mode_val,
@@ -789,7 +796,7 @@ class ModelRouter:
             structured_output_schema=request.structured_output_schema,
         )
 
-        self.telemetry.record_routing_decision(req_id, decision)
+        self._safe_telemetry("record_routing_decision", req_id, decision)
 
         await action_bus.publish(
             ActionEvent(
@@ -824,26 +831,30 @@ class ModelRouter:
                 privacy_mode=cfg_mode,
                 confirmation_token=confirmation_token,
             )
-            self.telemetry.record_security_decision(
+            self._safe_telemetry(
+                "record_security_decision",
                 request_id=req_id,
                 allowed=True,
                 privacy_mode=cfg_mode_val,
             )
         except SecurityViolationError as sec_err:
-            self.telemetry.record_security_decision(
+            self._safe_telemetry(
+                "record_security_decision",
                 request_id=req_id,
                 allowed=False,
                 privacy_mode=cfg_mode_val,
                 reason=str(sec_err),
             )
-            self.telemetry.complete_request(
+            self._safe_telemetry(
+                "complete_request",
                 request_id=req_id,
                 status="SECURITY_DENIED",
                 error=sec_err,
             )
             raise
 
-        primary_attempt_id = self.telemetry.start_provider_attempt(
+        primary_attempt_id = self._safe_telemetry(
+            "start_provider_attempt",
             request_id=req_id,
             provider=decision.provider,
             model_id=decision.selected_model,
@@ -853,6 +864,12 @@ class ModelRouter:
 
         t0 = time.monotonic()
         try:
+            if self.health_tracker.is_circuit_open(decision.provider):
+                raise ProviderUnavailableError(
+                    f"Circuit breaker for provider '{decision.provider}' is OPEN.",
+                    provider=decision.provider,
+                    model_id=decision.selected_model,
+                )
             resp = await primary_adapter.generate(safe_req)
             latency_ms = (time.monotonic() - t0) * 1000
             self.health_tracker.record_success(decision.provider, latency_ms)
@@ -860,20 +877,22 @@ class ModelRouter:
             # Extract token usage if supplied by provider
             tok_in = resp.usage.prompt_tokens if (resp.usage and resp.usage.prompt_tokens is not None) else None
             tok_out = resp.usage.completion_tokens if (resp.usage and resp.usage.completion_tokens is not None) else None
-            self.telemetry.complete_provider_attempt(
+            self._safe_telemetry(
+                "complete_provider_attempt",
                 attempt_id=primary_attempt_id,
                 outcome="SUCCESS",
                 tokens_input=tok_in,
                 tokens_output=tok_out,
             )
-            self.telemetry.complete_request(request_id=req_id, status="SUCCESS")
+            self._safe_telemetry("complete_request", request_id=req_id, status="SUCCESS")
             return resp
 
         except (ProviderUnavailableError, ProviderTimeoutError, RateLimitError) as exc:
             # Eligible failures: Record failure and evaluate fallback
             latency_ms = (time.monotonic() - t0) * 1000
             self.health_tracker.record_failure(decision.provider, exc, latency_ms)
-            self.telemetry.complete_provider_attempt(
+            self._safe_telemetry(
+                "complete_provider_attempt",
                 attempt_id=primary_attempt_id,
                 outcome=normalize_error_category(exc),
                 error=exc,
@@ -895,7 +914,8 @@ class ModelRouter:
                 logger.warning(
                     f"Provider '{decision.provider}' failed ({exc.error_code}). Fallback not eligible or disabled. Propagating error."
                 )
-                self.telemetry.complete_request(
+                self._safe_telemetry(
+                    "complete_request",
                     request_id=req_id,
                     status="FAILED",
                     error=exc,
@@ -907,7 +927,8 @@ class ModelRouter:
                 f"Initiating controlled fallback to '{fallback_provider}' ({fallback_model})."
             )
 
-            self.telemetry.record_fallback_started(
+            self._safe_telemetry(
+                "record_fallback_started",
                 request_id=req_id,
                 from_provider=decision.provider,
                 to_provider=fallback_provider,
@@ -946,7 +967,8 @@ class ModelRouter:
                     confirmation_token=confirmation_token,
                 )
             except SecurityViolationError as fb_sec_err:
-                self.telemetry.complete_request(
+                self._safe_telemetry(
+                    "complete_request",
                     request_id=req_id,
                     status="SECURITY_DENIED",
                     error=fb_sec_err,
@@ -956,7 +978,8 @@ class ModelRouter:
                 )
                 raise
 
-            fb_attempt_id = self.telemetry.start_provider_attempt(
+            fb_attempt_id = self._safe_telemetry(
+                "start_provider_attempt",
                 request_id=req_id,
                 provider=fallback_provider,
                 model_id=fallback_model,
@@ -972,13 +995,15 @@ class ModelRouter:
 
                 fb_tok_in = fb_resp.usage.prompt_tokens if (fb_resp.usage and fb_resp.usage.prompt_tokens is not None) else None
                 fb_tok_out = fb_resp.usage.completion_tokens if (fb_resp.usage and fb_resp.usage.completion_tokens is not None) else None
-                self.telemetry.complete_provider_attempt(
+                self._safe_telemetry(
+                    "complete_provider_attempt",
                     attempt_id=fb_attempt_id,
                     outcome="SUCCESS",
                     tokens_input=fb_tok_in,
                     tokens_output=fb_tok_out,
                 )
-                self.telemetry.complete_request(
+                self._safe_telemetry(
+                    "complete_request",
                     request_id=req_id,
                     status="SUCCESS",
                     fallback_occurred=True,
@@ -997,12 +1022,14 @@ class ModelRouter:
             except Exception as fb_exc:
                 fb_latency = (time.monotonic() - t_fb) * 1000
                 self.health_tracker.record_failure(fallback_provider, fb_exc, fb_latency)
-                self.telemetry.complete_provider_attempt(
+                self._safe_telemetry(
+                    "complete_provider_attempt",
                     attempt_id=fb_attempt_id,
                     outcome=normalize_error_category(fb_exc),
                     error=fb_exc,
                 )
-                self.telemetry.complete_request(
+                self._safe_telemetry(
+                    "complete_request",
                     request_id=req_id,
                     status="FAILED",
                     error=fb_exc,
@@ -1017,12 +1044,14 @@ class ModelRouter:
             # Non-eligible failures: propagate immediately without fallback
             latency_ms = (time.monotonic() - t0) * 1000
             self.health_tracker.record_failure(decision.provider, exc, latency_ms)
-            self.telemetry.complete_provider_attempt(
+            self._safe_telemetry(
+                "complete_provider_attempt",
                 attempt_id=primary_attempt_id,
                 outcome=normalize_error_category(exc),
                 error=exc,
             )
-            self.telemetry.complete_request(
+            self._safe_telemetry(
+                "complete_request",
                 request_id=req_id,
                 status="FAILED",
                 error=exc,
@@ -1035,12 +1064,14 @@ class ModelRouter:
             # Unclassified errors
             latency_ms = (time.monotonic() - t0) * 1000
             self.health_tracker.record_failure(decision.provider, exc, latency_ms)
-            self.telemetry.complete_provider_attempt(
+            self._safe_telemetry(
+                "complete_provider_attempt",
                 attempt_id=primary_attempt_id,
                 outcome=normalize_error_category(exc),
                 error=exc,
             )
-            self.telemetry.complete_request(
+            self._safe_telemetry(
+                "complete_request",
                 request_id=req_id,
                 status="FAILED",
                 error=exc,
@@ -1059,7 +1090,8 @@ class ModelRouter:
         prompt = request.get_prompt_text()
 
         cfg_mode_val = (self.config.privacy_mode.value if hasattr(self.config.privacy_mode, "value") else str(self.config.privacy_mode))
-        self.telemetry.start_request(
+        self._safe_telemetry(
+            "start_request",
             request_id=req_id,
             task_type=task_type.value,
             privacy_mode=cfg_mode_val,
@@ -1077,7 +1109,7 @@ class ModelRouter:
             structured_output_schema=request.structured_output_schema,
         )
 
-        self.telemetry.record_routing_decision(req_id, decision)
+        self._safe_telemetry("record_routing_decision", req_id, decision)
 
         self.security_gateway.security_policy = self.security_policy
         primary_adapter = self.get_adapter(decision.provider)
@@ -1095,26 +1127,30 @@ class ModelRouter:
                 privacy_mode=cfg_mode,
                 confirmation_token=confirmation_token,
             )
-            self.telemetry.record_security_decision(
+            self._safe_telemetry(
+                "record_security_decision",
                 request_id=req_id,
                 allowed=True,
                 privacy_mode=cfg_mode_val,
             )
         except SecurityViolationError as sec_err:
-            self.telemetry.record_security_decision(
+            self._safe_telemetry(
+                "record_security_decision",
                 request_id=req_id,
                 allowed=False,
                 privacy_mode=cfg_mode_val,
                 reason=str(sec_err),
             )
-            self.telemetry.complete_request(
+            self._safe_telemetry(
+                "complete_request",
                 request_id=req_id,
                 status="SECURITY_DENIED",
                 error=sec_err,
             )
             raise
 
-        primary_attempt_id = self.telemetry.start_provider_attempt(
+        primary_attempt_id = self._safe_telemetry(
+            "start_provider_attempt",
             request_id=req_id,
             provider=decision.provider,
             model_id=decision.selected_model,
@@ -1127,6 +1163,12 @@ class ModelRouter:
         t0 = time.monotonic()
 
         try:
+            if self.health_tracker.is_circuit_open(decision.provider):
+                raise ProviderUnavailableError(
+                    f"Circuit breaker for provider '{decision.provider}' is OPEN.",
+                    provider=decision.provider,
+                    model_id=decision.selected_model,
+                )
             async for chunk in self.security_gateway.wrap_stream(
                 primary_adapter.stream(safe_req),
                 decision.provider,
@@ -1136,23 +1178,24 @@ class ModelRouter:
                     visible_chunks_emitted += 1
                     if not first_token_recorded:
                         first_token_recorded = True
-                        self.telemetry.record_first_token(primary_attempt_id)
+                        self._safe_telemetry("record_first_token", primary_attempt_id)
                 yield chunk
 
             latency_ms = (time.monotonic() - t0) * 1000
             self.health_tracker.record_success(decision.provider, latency_ms)
-            self.telemetry.complete_provider_attempt(primary_attempt_id, outcome="SUCCESS")
-            self.telemetry.complete_request(request_id=req_id, status="SUCCESS")
+            self._safe_telemetry("complete_provider_attempt", primary_attempt_id, outcome="SUCCESS")
+            self._safe_telemetry("complete_request", request_id=req_id, status="SUCCESS")
             return
 
         except asyncio.CancelledError:
-            self.telemetry.record_stream_cancelled(req_id, primary_attempt_id)
+            self._safe_telemetry("record_stream_cancelled", req_id, primary_attempt_id)
             raise
 
         except (ProviderUnavailableError, ProviderTimeoutError, RateLimitError) as exc:
             latency_ms = (time.monotonic() - t0) * 1000
             self.health_tracker.record_failure(decision.provider, exc, latency_ms)
-            self.telemetry.complete_provider_attempt(
+            self._safe_telemetry(
+                "complete_provider_attempt",
                 primary_attempt_id,
                 outcome=normalize_error_category(exc),
                 error=exc,
@@ -1165,7 +1208,7 @@ class ModelRouter:
                     f"Stream error after {visible_chunks_emitted} visible chunk(s) emitted. "
                     "Refusing provider switch to avoid corrupted stream output."
                 )
-                self.telemetry.complete_request(request_id=req_id, status="FAILED", error=exc)
+                self._safe_telemetry("complete_request", request_id=req_id, status="FAILED", error=exc)
                 yield AIStreamChunk(
                     event_type=StreamEventType.ERROR,
                     error=exc,
@@ -1188,7 +1231,7 @@ class ModelRouter:
             )
 
             if not can_fallback:
-                self.telemetry.complete_request(request_id=req_id, status="FAILED", error=exc)
+                self._safe_telemetry("complete_request", request_id=req_id, status="FAILED", error=exc)
                 yield AIStreamChunk(
                     event_type=StreamEventType.ERROR,
                     error=exc,
@@ -1201,7 +1244,8 @@ class ModelRouter:
             logger.info(
                 f"Stream failure prior to output. Initiating fallback from {decision.provider} to {fallback_provider}."
             )
-            self.telemetry.record_fallback_started(
+            self._safe_telemetry(
+                "record_fallback_started",
                 request_id=req_id,
                 from_provider=decision.provider,
                 to_provider=fallback_provider,
@@ -1223,7 +1267,8 @@ class ModelRouter:
                     confirmation_token=confirmation_token,
                 )
             except SecurityViolationError as fb_sec_err:
-                self.telemetry.complete_request(
+                self._safe_telemetry(
+                    "complete_request",
                     request_id=req_id,
                     status="SECURITY_DENIED",
                     error=fb_sec_err,
@@ -1233,7 +1278,8 @@ class ModelRouter:
                 )
                 raise
 
-            fb_attempt_id = self.telemetry.start_provider_attempt(
+            fb_attempt_id = self._safe_telemetry(
+                "start_provider_attempt",
                 request_id=req_id,
                 provider=fallback_provider,
                 model_id=fallback_model,
@@ -1251,13 +1297,14 @@ class ModelRouter:
                 ):
                     if chunk.is_delta and chunk.delta and not fb_first_token_recorded:
                         fb_first_token_recorded = True
-                        self.telemetry.record_first_token(fb_attempt_id)
+                        self._safe_telemetry("record_first_token", fb_attempt_id)
                     yield chunk
 
                 fb_latency = (time.monotonic() - t_fb) * 1000
                 self.health_tracker.record_success(fallback_provider, fb_latency)
-                self.telemetry.complete_provider_attempt(fb_attempt_id, outcome="SUCCESS")
-                self.telemetry.complete_request(
+                self._safe_telemetry("complete_provider_attempt", fb_attempt_id, outcome="SUCCESS")
+                self._safe_telemetry(
+                    "complete_request",
                     request_id=req_id,
                     status="SUCCESS",
                     fallback_occurred=True,
@@ -1266,17 +1313,19 @@ class ModelRouter:
                 )
                 return
             except asyncio.CancelledError:
-                self.telemetry.record_stream_cancelled(req_id, fb_attempt_id)
+                self._safe_telemetry("record_stream_cancelled", req_id, fb_attempt_id)
                 raise
             except Exception as fb_exc:
                 fb_latency = (time.monotonic() - t_fb) * 1000
                 self.health_tracker.record_failure(fallback_provider, fb_exc, fb_latency)
-                self.telemetry.complete_provider_attempt(
+                self._safe_telemetry(
+                    "complete_provider_attempt",
                     fb_attempt_id,
                     outcome=normalize_error_category(fb_exc),
                     error=fb_exc,
                 )
-                self.telemetry.complete_request(
+                self._safe_telemetry(
+                    "complete_request",
                     request_id=req_id,
                     status="FAILED",
                     error=fb_exc,
@@ -1290,22 +1339,24 @@ class ModelRouter:
         except (AuthenticationError, SecurityViolationError, ProviderInvalidRequestError) as exc:
             latency_ms = (time.monotonic() - t0) * 1000
             self.health_tracker.record_failure(decision.provider, exc, latency_ms)
-            self.telemetry.complete_provider_attempt(
+            self._safe_telemetry(
+                "complete_provider_attempt",
                 primary_attempt_id,
                 outcome=normalize_error_category(exc),
                 error=exc,
             )
-            self.telemetry.complete_request(request_id=req_id, status="FAILED", error=exc)
+            self._safe_telemetry("complete_request", request_id=req_id, status="FAILED", error=exc)
             raise
         except Exception as exc:
             latency_ms = (time.monotonic() - t0) * 1000
             self.health_tracker.record_failure(decision.provider, exc, latency_ms)
-            self.telemetry.complete_provider_attempt(
+            self._safe_telemetry(
+                "complete_provider_attempt",
                 primary_attempt_id,
                 outcome=normalize_error_category(exc),
                 error=exc,
             )
-            self.telemetry.complete_request(request_id=req_id, status="FAILED", error=exc)
+            self._safe_telemetry("complete_request", request_id=req_id, status="FAILED", error=exc)
             raise
 
 

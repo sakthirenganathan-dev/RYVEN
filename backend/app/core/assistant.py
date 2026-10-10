@@ -1,8 +1,16 @@
 """Central Assistant core orchestrating routing, tool execution, safety guards, workflows, and local AI reasoning."""
 
 from typing import Any, Dict, Optional
+from app.ai.contracts import (
+    AIStreamChunk,
+    ProviderTimeoutError,
+    ProviderUnavailableError,
+    SecurityViolationError,
+    StreamEventType,
+)
 from app.ai.ollama import OllamaProvider, OllamaUnavailableError
 from app.ai.provider import AIProvider
+from app.ai.unified import UnifiedAIProvider, unified_ai_provider
 from app.core.context import ConversationManager
 from app.core.logging_config import logger
 from app.core.permissions import SafetyGuard, safety_guard
@@ -43,8 +51,8 @@ class Assistant:
         else:
             self.registry = registry
 
-        # 2. AI Provider (Ollama / Local Qwen)
-        self.ai_provider = ai_provider or OllamaProvider()
+        # 2. AI Provider (Unified AI provider delegating to ModelRouter & ModelSecurityGateway)
+        self.ai_provider = ai_provider or unified_ai_provider
 
         # 3. Intent Router
         self.router = router or IntentRouter()
@@ -339,7 +347,7 @@ class Assistant:
                 f"Tool '{decision.tool_name}' determined by router is not registered. Falling back to AI."
             )
 
-        # 4. AI Generation Path (Local Ollama / Qwen)
+        # 4. AI Generation Path (Unified / Local Ollama Qwen)
         # Retrieve recent conversation history for this session
         history = self.context_manager.get_history(session_id)
 
@@ -357,19 +365,47 @@ class Assistant:
             self.context_manager.add_user_message(session_id, clean_text)
             self.context_manager.add_assistant_message(session_id, ai_response.content)
 
+            provider_name = (
+                ai_response.provider.value
+                if hasattr(ai_response.provider, "value")
+                else str(getattr(ai_response, "provider", self.ai_provider.provider_name))
+            )
+            model_name = getattr(ai_response, "model_id", getattr(ai_response, "model", "qwen2.5:7b"))
+
+            resp_metadata = {
+                "model": model_name,
+                "provider": provider_name,
+                **getattr(ai_response, "metadata", {}),
+            }
+            if getattr(ai_response, "usage", None):
+                resp_metadata["usage"] = (
+                    ai_response.usage.model_dump()
+                    if hasattr(ai_response.usage, "model_dump")
+                    else dict(ai_response.usage)
+                )
+
             return ChatResponse(
                 success=True,
                 type="ai",
                 message=ai_response.content,
                 tool=None,
+                metadata=resp_metadata,
+            )
+
+        except SecurityViolationError as exc:
+            logger.warning(f"Security gateway blocked assistant AI generation: {exc}")
+            return ChatResponse(
+                success=False,
+                type="error",
+                message=str(exc),
+                tool=None,
                 metadata={
-                    "model": ai_response.model,
-                    "provider": ai_response.provider,
-                    **ai_response.metadata,
+                    "error_type": "SECURITY_POLICY_DENIAL",
+                    "reason_code": getattr(exc, "reason_code", "PRIVACY_POLICY_DENIAL"),
                 },
             )
 
-        except OllamaUnavailableError as exc:
+        except (OllamaUnavailableError, ProviderUnavailableError) as exc:
             logger.error(f"AI Provider error: {exc}")
             return ChatResponse(
                 success=False,
@@ -378,7 +414,20 @@ class Assistant:
                 tool=None,
                 metadata={
                     "error_type": "AI_PROVIDER_UNAVAILABLE",
-                    "provider": self.ai_provider.provider_name,
+                    "provider": getattr(self.ai_provider, "provider_name", "unified"),
+                },
+            )
+
+        except ProviderTimeoutError as exc:
+            logger.error(f"AI Provider timeout: {exc}")
+            return ChatResponse(
+                success=False,
+                type="error",
+                message=str(exc),
+                tool=None,
+                metadata={
+                    "error_type": "AI_PROVIDER_TIMEOUT",
+                    "provider": getattr(self.ai_provider, "provider_name", "unified"),
                 },
             )
 
@@ -391,3 +440,38 @@ class Assistant:
                 tool=None,
                 metadata={"error_type": "AI_EXECUTION_FAILURE"},
             )
+
+    async def stream(
+        self,
+        message: str,
+        session_id: str = "default",
+        allow_remote: bool = False,
+        preferred_model_id: Optional[str] = None,
+        **kwargs: Any,
+    ):
+        """Stream AI response chunks incrementally through authoritative provider pipeline."""
+        clean_text = message.strip()
+        history = self.context_manager.get_history(session_id)
+        if hasattr(self.ai_provider, "stream") and callable(getattr(self.ai_provider, "stream")):
+            async for chunk in self.ai_provider.stream(
+                prompt=clean_text,
+                system_prompt=self.system_prompt,
+                messages=history,
+                allow_remote=allow_remote,
+                preferred_model_id=preferred_model_id,
+                **kwargs,
+            ):
+                yield chunk
+        else:
+            resp = await self.ai_provider.generate(
+                prompt=clean_text,
+                system_prompt=self.system_prompt,
+                messages=history,
+                **kwargs,
+            )
+            model_id = getattr(resp, "model_id", getattr(resp, "model", "qwen2.5:7b"))
+            provider_val = getattr(resp, "provider", "ollama")
+            p_str = provider_val.value if hasattr(provider_val, "value") else str(provider_val)
+            yield AIStreamChunk(event_type=StreamEventType.START, model_id=model_id, provider=p_str)
+            yield AIStreamChunk(event_type=StreamEventType.DELTA, delta=resp.content, model_id=model_id, provider=p_str)
+            yield AIStreamChunk(event_type=StreamEventType.DONE, model_id=model_id, provider=p_str)

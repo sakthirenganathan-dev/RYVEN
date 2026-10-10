@@ -33,6 +33,11 @@ class ModelProvider(str, Enum):
     HUGGINGFACE_REMOTE = "HUGGINGFACE_REMOTE"
     GROK = "GROK"
 
+    def __eq__(self, other: Any) -> bool:
+        if isinstance(other, str):
+            return self.value.lower() == other.lower()
+        return super().__eq__(other)
+
 
 class ModelProfile(BaseModel):
     """Comprehensive metadata descriptor for an AI model."""
