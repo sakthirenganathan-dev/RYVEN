@@ -68,6 +68,20 @@ class RouterConfig(BaseModel):
         description="Maximum bounded capacity of completed request records ring buffer",
     )
 
+    # M17.11 Hybrid Benchmark & Adaptive Routing Flags
+    recommendation_only: bool = Field(
+        default=True,
+        description="Whether calibration advice is recommendation-only (does not alter routing silently)",
+    )
+    enable_adaptive_routing: bool = Field(
+        default=False,
+        description="Whether evidence-based adaptive routing is enabled (requires recommendation_only=False)",
+    )
+    kill_switch_adaptive_routing: bool = Field(
+        default=False,
+        description="Emergency kill-switch to immediately prevent all adaptive routing regardless of other settings",
+    )
+
     @field_validator("max_fallback_depth")
     @classmethod
     def validate_fallback_depth(cls, v: int) -> int:

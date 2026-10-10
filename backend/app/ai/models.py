@@ -87,3 +87,7 @@ class RoutingDecision(BaseModel):
     latency_sensitive: bool = Field(default=False, description="Whether low latency is prioritized")
     health_summary: Optional[Dict[str, Any]] = Field(default=None, description="Sanitized health summary of chosen provider")
 
+    # M17.11 Benchmark Calibration Metadata
+    calibration_recommendation: Optional[Dict[str, Any]] = Field(default=None, description="Benchmark calibration recommendation if available")
+    adaptive_routing_active: bool = Field(default=False, description="Whether adaptive routing based on benchmark metrics was applied")
+

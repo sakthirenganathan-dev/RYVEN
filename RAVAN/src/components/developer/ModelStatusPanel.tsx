@@ -3,9 +3,12 @@ import {
   fetchProvidersHealth,
   fetchVisionStatus,
   fetchTelemetrySummary,
+  fetchBenchmarkResults,
+  triggerBenchmarkRun,
   type UnifiedProvidersStatus,
   type VisionStatus,
   type ModelTelemetrySummary,
+  type BenchmarkResultsResponse,
 } from "@/services/models";
 import { StatusIndicator } from "@/components/hud/StatusIndicator";
 
@@ -13,21 +16,26 @@ export function ModelStatusPanel() {
   const [data, setData] = useState<UnifiedProvidersStatus | null>(null);
   const [vision, setVision] = useState<VisionStatus | null>(null);
   const [telemetry, setTelemetry] = useState<ModelTelemetrySummary | null>(null);
+  const [benchmark, setBenchmark] = useState<BenchmarkResultsResponse | null>(null);
+  const [isBenchmarking, setIsBenchmarking] = useState(false);
+  const [benchError, setBenchError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     let mounted = true;
     async function load() {
       try {
-        const [res, vis, tel] = await Promise.allSettled([
+        const [res, vis, tel, bmk] = await Promise.allSettled([
           fetchProvidersHealth(),
           fetchVisionStatus(),
           fetchTelemetrySummary(),
+          fetchBenchmarkResults(),
         ]);
         if (mounted) {
           if (res.status === "fulfilled") setData(res.value);
           if (vis.status === "fulfilled") setVision(vis.value);
           if (tel.status === "fulfilled") setTelemetry(tel.value);
+          if (bmk.status === "fulfilled") setBenchmark(bmk.value);
         }
       } catch (err) {
         console.warn("Failed to load providers health:", err);
@@ -42,6 +50,20 @@ export function ModelStatusPanel() {
       clearInterval(timer);
     };
   }, []);
+
+  const handleRunBenchmark = async (allowCloud: boolean) => {
+    setIsBenchmarking(true);
+    setBenchError(null);
+    try {
+      await triggerBenchmarkRun({ allow_cloud: allowCloud, samples_per_task: 1 });
+      const bmk = await fetchBenchmarkResults();
+      setBenchmark(bmk);
+    } catch (err: any) {
+      setBenchError(err.message || "Benchmark failed");
+    } finally {
+      setIsBenchmarking(false);
+    }
+  };
 
   const ollama = data?.providers?.ollama;
   const grok = data?.providers?.grok;
@@ -216,6 +238,101 @@ export function ModelStatusPanel() {
             <span>BUFFER: {telemetry?.buffer_status ? `${telemetry.buffer_status.events_retained}/${telemetry.buffer_status.max_events} EVTS` : "BOUNDED"}</span>
             <span className="text-signal">PROMPTS & SECRETS: ZERO-STORE</span>
           </div>
+        </div>
+      </div>
+
+      {/* Hybrid AI Benchmark & Calibration (M17.11) */}
+      <div className="space-y-1.5 pt-1">
+        <div className="flex items-center justify-between">
+          <span className="text-[9px] text-muted-foreground tracking-widest">
+            HYBRID BENCHMARK & CALIBRATION (M17.11)
+          </span>
+          {benchmark?.is_running && (
+            <span className="text-holo text-[8px] animate-pulse">BENCHMARK RUNNING…</span>
+          )}
+        </div>
+
+        <div className="border border-border/60 p-2 bg-background/40 space-y-2">
+          {/* Action triggers */}
+          <div className="flex gap-2">
+            <button
+              onClick={() => handleRunBenchmark(false)}
+              disabled={isBenchmarking || benchmark?.is_running}
+              className="flex-1 py-1 px-2 border border-holo/50 bg-holo/10 hover:bg-holo/20 disabled:opacity-50 text-[9px] font-semibold text-holo rounded transition"
+            >
+              {isBenchmarking ? "PROBING…" : "PROBE LOCAL"}
+            </button>
+            <button
+              onClick={() => handleRunBenchmark(true)}
+              disabled={isBenchmarking || benchmark?.is_running}
+              className="flex-1 py-1 px-2 border border-amber-500/50 bg-amber-500/10 hover:bg-amber-500/20 disabled:opacity-50 text-[9px] font-semibold text-amber-500 rounded transition"
+            >
+              {isBenchmarking ? "PROBING…" : "PROBE CLOUD"}
+            </button>
+          </div>
+
+          {benchError && (
+            <div className="text-[8px] text-rose-400 border border-rose-500/30 p-1 bg-rose-500/10 rounded">
+              {benchError}
+            </div>
+          )}
+
+          {/* Side-by-side metric comparison */}
+          {benchmark?.summaries && Object.keys(benchmark.summaries).length > 0 ? (
+            <div className="space-y-1.5">
+              <div className="grid grid-cols-2 gap-1.5 text-[8px]">
+                {Object.entries(benchmark.summaries).map(([prov, sum]) => (
+                  <div key={prov} className="border border-border/40 p-1.5 bg-background/60">
+                    <div className="flex items-center justify-between font-semibold text-foreground">
+                      <span>{prov}</span>
+                      <span className="text-holo">{Math.round(sum.avg_quality_score * 100)}% Q</span>
+                    </div>
+                    <div className="text-muted-foreground text-[7.5px] mt-0.5 truncate">{sum.model_id}</div>
+                    <div className="grid grid-cols-2 gap-1 mt-1 text-[7.5px]">
+                      <div>
+                        <span className="text-muted-foreground">P50: </span>
+                        <span>{sum.latency?.p50_ms ? `${Math.round(sum.latency.p50_ms)}ms` : "N/A"}</span>
+                      </div>
+                      <div>
+                        <span className="text-muted-foreground">TTFT: </span>
+                        <span>{sum.ttft?.p50_ms ? `${Math.round(sum.ttft.p50_ms)}ms` : "N/A"}</span>
+                      </div>
+                    </div>
+                    {sum.avg_tokens_per_second != null && (
+                      <div className="text-[7.5px] text-muted-foreground mt-0.5">
+                        SPD: <span className="text-signal">{sum.avg_tokens_per_second} tok/s</span>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+
+              {/* Calibration Advice */}
+              {benchmark.recommendation && (
+                <div className="border border-holo/30 p-1.5 bg-holo/5 space-y-1">
+                  <div className="flex items-center justify-between text-[8px]">
+                    <span className="font-semibold text-holo">EVIDENCE ROUTING ADVICE</span>
+                    <span
+                      className={`px-1 py-0.2 rounded text-[7.5px] ${
+                        benchmark.recommendation.cloud_delegation_justified
+                          ? "bg-amber-500/20 text-amber-400 border border-amber-500/40"
+                          : "bg-holo/20 text-holo border border-holo/40"
+                      }`}
+                    >
+                      {benchmark.recommendation.cloud_delegation_justified ? "CLOUD JUSTIFIED" : "LOCAL OPTIMAL"}
+                    </span>
+                  </div>
+                  <div className="text-[8px] text-muted-foreground leading-tight">
+                    {benchmark.recommendation.explanation}
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="text-[8px] text-muted-foreground text-center py-1">
+              NO BENCHMARK EVIDENCE COLLECTED YET. PROBE TO CALIBRATE ROUTER.
+            </div>
+          )}
         </div>
       </div>
 

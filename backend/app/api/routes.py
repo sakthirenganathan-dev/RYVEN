@@ -1,8 +1,9 @@
 """FastAPI endpoints for RYVEN."""
 
 from typing import Any, Dict, List, Optional
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
 from app.core.assistant import Assistant
 from app.core.config import settings
 from app.core.logging_config import logger
@@ -668,6 +669,92 @@ async def get_models_telemetry_events_endpoint(
     """Retrieve bounded sanitized recent telemetry audit events without secrets or prompt text."""
     from app.ai.telemetry import model_telemetry_service
     return model_telemetry_service.get_events(limit=limit, event_type=event_type)
+
+
+# --------------------------------------------------------------------------
+# M17.11 BENCHMARK & CALIBRATION API ENDPOINTS
+# --------------------------------------------------------------------------
+
+class BenchmarkRunRequest(BaseModel):
+    """Payload to trigger synthetic benchmark execution."""
+    allow_cloud: bool = False
+    samples_per_task: int = Field(default=1, ge=1, le=3)
+    confirmation_token: Optional[str] = None
+
+
+@router.post("/v1/models/benchmark/run")
+@router.post("/models/benchmark/run")
+async def run_models_benchmark_endpoint(payload: Optional[BenchmarkRunRequest] = None) -> Dict[str, Any]:
+    """Execute bounded single-flight synthetic benchmark across local and authorized cloud models."""
+    from app.ai.benchmark import model_benchmark_engine
+    from app.ai.router import model_router
+
+    if model_benchmark_engine.is_running:
+        raise HTTPException(
+            status_code=409,
+            detail="A benchmark execution is already in flight. Concurrent runs are forbidden.",
+        )
+
+    data = payload or BenchmarkRunRequest()
+    allow_cloud = data.allow_cloud
+    samples_per_task = max(1, min(data.samples_per_task, 3))
+
+    adapters: Dict[str, Any] = {}
+    try:
+        adapters["OLLAMA"] = model_router.get_adapter("OLLAMA")
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Local Ollama adapter unavailable: {exc}")
+
+    if allow_cloud:
+        try:
+            adapters["HUGGINGFACE_REMOTE"] = model_router.get_adapter("HUGGINGFACE_REMOTE")
+        except Exception:
+            try:
+                adapters["HUGGINGFACE"] = model_router.get_adapter("HUGGINGFACE")
+            except Exception as hf_exc:
+                logger.warning(f"Cloud Hugging Face adapter not available for benchmark: {hf_exc}")
+
+    try:
+        summaries = await model_benchmark_engine.run_benchmark(
+            adapters=adapters,
+            samples_per_task=samples_per_task,
+            allow_cloud=allow_cloud,
+            confirmation_token=data.confirmation_token,
+        )
+        recommendation = model_benchmark_engine.get_latest_recommendation()
+        return {
+            "status": "completed",
+            "samples_per_task": samples_per_task,
+            "allow_cloud": allow_cloud,
+            "summaries": {k: v.model_dump() for k, v in summaries.items()},
+            "recommendation": recommendation.model_dump(),
+        }
+    except RuntimeError as r_err:
+        raise HTTPException(status_code=409, detail=str(r_err))
+    except Exception as exc:
+        logger.error(f"Benchmark execution error: {exc}")
+        raise HTTPException(status_code=500, detail=f"Benchmark execution failed: {str(exc)[:100]}")
+
+
+@router.get("/v1/models/benchmark/results")
+@router.get("/models/benchmark/results")
+async def get_models_benchmark_results_endpoint() -> Dict[str, Any]:
+    """Retrieve latest benchmark metric summaries and execution status."""
+    from app.ai.benchmark import model_benchmark_engine
+    return {
+        "is_running": model_benchmark_engine.is_running,
+        "sample_count": len(model_benchmark_engine.get_samples()),
+        "summaries": {k: v.model_dump() for k, v in model_benchmark_engine.get_summaries().items()},
+        "recommendation": model_benchmark_engine.get_latest_recommendation().model_dump(),
+    }
+
+
+@router.get("/v1/models/benchmark/calibration")
+@router.get("/models/benchmark/calibration")
+async def get_models_benchmark_calibration_endpoint() -> Dict[str, Any]:
+    """Retrieve current routing calibration recommendation derived from benchmark evidence."""
+    from app.ai.benchmark import model_benchmark_engine
+    return model_benchmark_engine.get_latest_recommendation().model_dump()
 
 
 # --------------------------------------------------------------------------

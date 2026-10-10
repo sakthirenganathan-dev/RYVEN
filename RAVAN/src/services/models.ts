@@ -115,3 +115,59 @@ export async function fetchTelemetrySummary(): Promise<ModelTelemetrySummary> {
   return res.json();
 }
 
+export interface ProviderBenchmarkSummary {
+  provider: string;
+  model_id: string;
+  total_samples: number;
+  successful_samples: number;
+  failed_samples: number;
+  success_rate: number;
+  latency: LatencyStats;
+  ttft: LatencyStats;
+  avg_tokens_per_second: number | null;
+  avg_quality_score: number;
+  category_scores: Record<string, number>;
+}
+
+export interface CalibrationRecommendation {
+  recommended_default_provider: string;
+  recommended_default_model: string;
+  cloud_delegation_justified: boolean;
+  eligible_task_types: string[];
+  confidence_score: number;
+  explanation: string;
+  evidence_summary: Record<string, any>;
+}
+
+export interface BenchmarkResultsResponse {
+  is_running: boolean;
+  sample_count: number;
+  summaries: Record<string, ProviderBenchmarkSummary>;
+  recommendation: CalibrationRecommendation;
+}
+
+export async function fetchBenchmarkResults(): Promise<BenchmarkResultsResponse> {
+  const res = await fetch(`${RYVEN_API_BASE_URL}/api/v1/models/benchmark/results`);
+  if (!res.ok) {
+    throw new Error(`Failed to fetch benchmark results: ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function triggerBenchmarkRun(payload: {
+  allow_cloud?: boolean;
+  samples_per_task?: number;
+  confirmation_token?: string;
+} = {}): Promise<any> {
+  const res = await fetch(`${RYVEN_API_BASE_URL}/api/v1/models/benchmark/run`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || `Benchmark run failed: ${res.status}`);
+  }
+  return res.json();
+}
+

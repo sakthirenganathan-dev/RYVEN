@@ -52,6 +52,7 @@ from app.ai.telemetry import (
     model_telemetry_service,
     normalize_error_category,
 )
+from app.ai.benchmark import model_benchmark_engine
 from app.core.logging_config import logger
 
 
@@ -246,7 +247,31 @@ class ModelRouter:
         sync_hardware: bool = False,
         structured_output_schema: Optional[Dict[str, Any]] = None,
     ) -> RoutingDecision:
-        """Deterministically select the optimal model profile adhering to safety and health policies."""
+        """Select optimal model profile adhering to safety, health, and benchmark calibration policies."""
+        decision = await self._route_internal(
+            task_type=task_type,
+            prompt=prompt,
+            allow_remote=allow_remote,
+            preferred_model_id=preferred_model_id,
+            sync_hardware=sync_hardware,
+            structured_output_schema=structured_output_schema,
+        )
+        rec = model_benchmark_engine.get_latest_recommendation()
+        rec_dict = rec.model_dump() if rec else None
+        if decision.calibration_recommendation is None and rec_dict is not None:
+            return decision.model_copy(update={"calibration_recommendation": rec_dict})
+        return decision
+
+    async def _route_internal(
+        self,
+        task_type: TaskType,
+        prompt: str = "",
+        allow_remote: bool = False,
+        preferred_model_id: Optional[str] = None,
+        sync_hardware: bool = False,
+        structured_output_schema: Optional[Dict[str, Any]] = None,
+    ) -> RoutingDecision:
+        """Deterministic core routing logic."""
         # 1. Hardware diagnostics & sync
         hardware = await HardwareDiagnostics.get_profile()
         if sync_hardware and hardware.ollama_online:
@@ -711,6 +736,53 @@ class ModelRouter:
                     latency_sensitive=latency_sensitive,
                     health_summary=self.health_tracker.get_health_summary(remote_cand.provider),
                 )
+
+        # 8b. M17.11 Adaptive Routing via Benchmark Calibration
+        kill_switch = getattr(self.config, "kill_switch_adaptive_routing", False)
+        adaptive_enabled = getattr(self.config, "enable_adaptive_routing", False)
+        recommendation_only = getattr(self.config, "recommendation_only", True)
+        rec = model_benchmark_engine.get_latest_recommendation()
+        rec_dict = rec.model_dump() if rec else None
+
+        if (
+            adaptive_enabled
+            and (not recommendation_only)
+            and (not kill_switch)
+            and rec
+            and rec.cloud_delegation_justified
+            and (task_type.value in rec.eligible_task_types)
+            and allow_remote
+            and (self.security_policy.allow_remote_inference or self.config.allow_remote_inference)
+            and privacy_mode != PrivacyMode.LOCAL_ONLY
+        ):
+            is_sensitive, sens_findings = self.security_gateway.scan_sensitive_data(prompt)
+            if not is_sensitive:
+                remote_candidates = self.registry.list_models(
+                    task_type=task_type,
+                    enabled_only=True,
+                )
+                remote_cand = next((m for m in remote_candidates if m.local_or_remote == "remote"), None)
+                if remote_cand and not self.health_tracker.is_circuit_open(remote_cand.provider):
+                    return RoutingDecision(
+                        selected_model=remote_cand.id,
+                        provider=remote_cand.provider.value,
+                        task_type=task_type,
+                        reason=f"Adaptive routing calibrated by benchmark metrics: {rec.explanation}",
+                        reason_code="ADAPTIVE_BENCHMARK_ROUTED",
+                        fallback=default_local,
+                        fallback_eligible=True,
+                        fallback_model=default_local,
+                        fallback_provider=default_local_provider,
+                        remote_allowed=True,
+                        local_or_remote="remote",
+                        memory_estimate_gb=0.0,
+                        estimated_complexity=complexity.value,
+                        context_size_requirement=context_size,
+                        latency_sensitive=latency_sensitive,
+                        health_summary=self.health_tracker.get_health_summary(remote_cand.provider),
+                        calibration_recommendation=rec_dict,
+                        adaptive_routing_active=True,
+                    )
 
         # 9. Standard Local-First Default (Low / Medium complexity, routine coding, or remote disallowed)
         # Check if local Ollama circuit is tripped
