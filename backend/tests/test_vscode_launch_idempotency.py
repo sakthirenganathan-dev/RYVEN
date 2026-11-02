@@ -481,3 +481,94 @@ async def test_immediate_retry_after_failed_launch():
         assert res2.get("idempotent_cached") is not True
         assert attempt == 2
 
+
+@pytest.mark.asyncio
+async def test_timeout_does_not_trigger_repeated_launches():
+    """CRITICAL REGRESSION: A timeout during or following launch does NOT trigger duplicate process spawns on retry."""
+    tool = OpenApplicationTool()
+    launch_count = 0
+
+    def mock_launch(exe, args=None):
+        nonlocal launch_count
+        launch_count += 1
+
+    with patch.object(tool, "_locate_executable", return_value="C:\\Programs\\VSCode\\Code.exe"), \
+         patch.object(tool, "_reuse_existing_window_if_applicable", return_value=None), \
+         patch.object(tool, "_is_application_process_running", return_value=False), \
+         patch.object(tool, "_launch_process", side_effect=mock_launch):
+
+        async def slow_execute(app_key, display_name, target_path):
+            tool._record_launch_attempt(app_key, target_path)
+            tool._launch_process("C:\\Programs\\VSCode\\Code.exe")
+            await asyncio.sleep(5.0)  # Simulates slow verification / timeout
+            return {"success": True, "tool": "open_application"}
+
+        # Attempt 1: Invocation times out after process launch was triggered
+        with patch.object(tool, "_execute_launch", side_effect=slow_execute):
+            try:
+                await asyncio.wait_for(tool.execute(application="vscode"), timeout=0.05)
+            except asyncio.TimeoutError:
+                pass
+
+        # At this point, attempt 1 launched the process once
+        assert launch_count == 1
+
+        # Attempt 2: Caller (e.g. orchestrator or recovery loop) retries due to timeout
+        res2 = await tool.execute(application="vscode")
+        assert res2["success"] is True
+        assert res2.get("idempotent_cached") is True
+
+        # STRICT INVARIANT: Exactly 1 launch was executed; timeout did NOT cause repeated launches!
+        assert launch_count == 1
+
+
+@pytest.mark.asyncio
+async def test_no_unlimited_launch_attempts_under_failure_loop():
+    """CRITICAL REGRESSION: One user command does not create unlimited launch attempts under retries."""
+    tool = OpenApplicationTool()
+    launch_count = 0
+
+    def mock_launch(exe, args=None):
+        nonlocal launch_count
+        launch_count += 1
+
+    with patch.object(tool, "_locate_executable", return_value="C:\\Programs\\VSCode\\Code.exe"), \
+         patch.object(tool, "_reuse_existing_window_if_applicable", return_value=None), \
+         patch.object(tool, "_is_application_process_running", return_value=False), \
+         patch.object(tool, "_launch_process", side_effect=mock_launch):
+
+        # Initial launch
+        res1 = await tool.execute(application="vscode")
+        assert res1["success"] is True
+        assert launch_count == 1
+
+        # Simulate 10 rapid retry attempts (e.g. looping orchestrator or user clicking repeatedly)
+        for _ in range(10):
+            res_retry = await tool.execute(application="vscode")
+            assert res_retry["success"] is True
+            assert res_retry.get("idempotent_cached") is True
+
+        # Launch count MUST remain strictly 1 — never unlimited
+        assert launch_count == 1
+
+
+@pytest.mark.asyncio
+async def test_process_running_detection_suppresses_duplicate_launch():
+    """When VS Code process is already running in psutil (even without visible window yet), duplicate launch is suppressed."""
+    tool = OpenApplicationTool()
+
+    with patch.object(tool, "_locate_executable", return_value="C:\\Programs\\VSCode\\Code.exe"), \
+         patch.object(tool, "_reuse_existing_window_if_applicable", return_value=None), \
+         patch.object(tool, "_is_application_process_running", return_value=True), \
+         patch.object(tool, "_launch_process") as mock_launch:
+
+        res = await tool.execute(application="vscode")
+        assert res["success"] is True
+        assert res["reused_window"] is True
+        assert res.get("process_running") is True
+        assert "already" in res["message"].lower()
+
+        # Process was already running: launch_process was NEVER invoked
+        mock_launch.assert_not_called()
+
+

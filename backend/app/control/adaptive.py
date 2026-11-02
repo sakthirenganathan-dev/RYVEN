@@ -786,7 +786,12 @@ class AdaptiveComputerUseController:
 
         # Check application launch duplication
         if step.action in ("open_application", "launch_app"):
-            app_req = (step.application_context or step.arguments.get("app_name") or "").lower()
+            app_req = (
+                step.application_context
+                or step.arguments.get("app_name")
+                or step.arguments.get("application")
+                or ""
+            ).lower()
             if app_req and observed.active_application and app_req in observed.active_application.lower():
                 return True
 

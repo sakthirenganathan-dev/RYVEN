@@ -286,6 +286,173 @@ export const RYVEN_API_BASE_URL =
 // Backwards compatibility alias
 export const JARVIS_API_BASE_URL = RYVEN_API_BASE_URL;
 
+export interface BackendHealthInfo {
+  status: "ok" | "degraded" | "offline";
+  backend: "online" | "offline";
+  ollama: "online" | "offline";
+  model: string;
+  modelAvailable: boolean;
+  version: string;
+  toolsCount: number;
+}
+
+let inFlightHealthPromise: Promise<BackendHealthInfo> | null = null;
+let lastHealthCheckTime = 0;
+let lastHealthResult: BackendHealthInfo | null = null;
+
+/**
+ * Perform on-demand loopback probe to verify real backend & Ollama daemon connectivity.
+ * Concurrent requests are deduplicated and responses cached for 3 seconds.
+ */
+export async function checkBackendHealth(): Promise<BackendHealthInfo> {
+  const now = Date.now();
+  if (lastHealthResult && now - lastHealthCheckTime < 3000) {
+    return lastHealthResult;
+  }
+  if (inFlightHealthPromise) {
+    return inFlightHealthPromise;
+  }
+
+  inFlightHealthPromise = (async () => {
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 3500);
+      const res = await fetch(`${RYVEN_API_BASE_URL}/api/health`, {
+        method: "GET",
+        signal: controller.signal,
+      });
+      clearTimeout(timeout);
+      if (!res.ok) {
+        lastHealthResult = {
+          status: "offline",
+          backend: "offline",
+          ollama: "offline",
+          model: "offline",
+          modelAvailable: false,
+          version: "unknown",
+          toolsCount: 0,
+        };
+        lastHealthCheckTime = Date.now();
+        return lastHealthResult;
+      }
+      const data = await res.json();
+      lastHealthResult = {
+        status: data.status === "ok" ? "ok" : "degraded",
+        backend: data.backend === "online" ? "online" : "offline",
+        ollama: data.ollama === "online" ? "online" : "offline",
+        model: typeof data.model === "string" ? data.model : "qwen2.5:7b",
+        modelAvailable: Boolean(data.model_available),
+        version: typeof data.version === "string" ? data.version : "2.0.0",
+        toolsCount: Array.isArray(data.registered_tools) ? data.registered_tools.length : 0,
+      };
+      lastHealthCheckTime = Date.now();
+      return lastHealthResult;
+    } catch {
+      lastHealthResult = {
+        status: "offline",
+        backend: "offline",
+        ollama: "offline",
+        model: "offline",
+        modelAvailable: false,
+        version: "unknown",
+        toolsCount: 0,
+      };
+      lastHealthCheckTime = Date.now();
+      return lastHealthResult;
+    } finally {
+      inFlightHealthPromise = null;
+    }
+  })();
+
+  return inFlightHealthPromise;
+}
+
+export interface SystemDiskMetric {
+  total_gb: number;
+  used_gb: number;
+  free_gb: number;
+  percent: number;
+}
+
+export interface SystemBatteryMetric {
+  available: boolean;
+  percent: number | null;
+  power_plugged: boolean | null;
+  time_left_seconds: number | null;
+}
+
+export interface SystemStatusData {
+  cpu_percent: number;
+  ram_total_gb: number;
+  ram_used_gb: number;
+  ram_percent: number;
+  disk: SystemDiskMetric;
+  battery: SystemBatteryMetric;
+}
+
+export interface MemoryStatsData {
+  total_memories: number;
+  semantic_count: number;
+  episodic_count: number;
+  preference_count: number;
+  project_scoped_count: number;
+  global_count: number;
+}
+
+/**
+ * Fetch genuine hardware diagnostics (CPU, RAM, Disk, Battery) from /api/system/status.
+ */
+export async function fetchSystemStatus(signal?: AbortSignal): Promise<SystemStatusData> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 4000);
+  const combinedSignal = signal || controller.signal;
+
+  try {
+    const res = await fetch(`${RYVEN_API_BASE_URL}/api/system/status`, {
+      method: "GET",
+      signal: combinedSignal,
+      headers: { Accept: "application/json" },
+    });
+    clearTimeout(timeout);
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status}: Failed to fetch system telemetry`);
+    }
+    const json = await res.json();
+    if (!json.success || !json.data) {
+      throw new Error(json.message || "Invalid system telemetry data");
+    }
+    return json.data as SystemStatusData;
+  } catch (err) {
+    clearTimeout(timeout);
+    throw err;
+  }
+}
+
+/**
+ * Fetch genuine memory database statistics from /api/memory/stats.
+ */
+export async function fetchMemoryStats(signal?: AbortSignal): Promise<MemoryStatsData> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 4000);
+  const combinedSignal = signal || controller.signal;
+
+  try {
+    const res = await fetch(`${RYVEN_API_BASE_URL}/api/memory/stats`, {
+      method: "GET",
+      signal: combinedSignal,
+      headers: { Accept: "application/json" },
+    });
+    clearTimeout(timeout);
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status}: Failed to fetch memory stats`);
+    }
+    return (await res.json()) as MemoryStatsData;
+  } catch (err) {
+    clearTimeout(timeout);
+    throw err;
+  }
+}
+
 /**
  * Calls POST /api/chat on the Python FastAPI backend.
  */

@@ -131,6 +131,7 @@ class OpenApplicationTool(BaseTool):
     _lock_loop: Any = None
     _in_flight: Dict[Tuple[str, Optional[str]], asyncio.Future] = {}
     _recent_launches: Dict[Tuple[str, Optional[str]], Tuple[float, Dict[str, Any]]] = {}
+    _last_launch_attempt: Dict[Tuple[str, Optional[str]], float] = {}
 
     @classmethod
     def _get_lock(cls) -> asyncio.Lock:
@@ -148,6 +149,7 @@ class OpenApplicationTool(BaseTool):
         cls._lock_loop = None
         cls._in_flight.clear()
         cls._recent_launches.clear()
+        cls._last_launch_attempt.clear()
 
     def _resolve_application_key(self, query: str) -> Optional[str]:
         """Match query against allowlist canonical keys and aliases."""
@@ -192,6 +194,22 @@ class OpenApplicationTool(BaseTool):
             "explorer": ["explorer.exe"],
         }
         return names.get(app_key, [f"{app_key}.exe"])
+
+    def _is_application_process_running(self, app_key: str) -> bool:
+        """Safely check if any process for this approved application is running in the OS process table."""
+        approved_exes = [e.lower() for e in self._get_app_executable_names(app_key)]
+        try:
+            import psutil
+            for proc in psutil.process_iter(["name"]):
+                try:
+                    pname = (proc.info.get("name") or "").lower()
+                    if pname in approved_exes or any(pname == e.lower() for e in approved_exes):
+                        return True
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    continue
+        except Exception as exc:
+            logger.debug(f"[APP_TOOL] Process check unavailable: {exc}")
+        return False
 
     def _is_path_within_permitted_roots(self, target_path: str) -> bool:
         """Verify target path is canonical and resides within approved directory roots."""
@@ -394,6 +412,11 @@ class OpenApplicationTool(BaseTool):
         else:
             logger.info(f"[NON-WINDOWS] os.startfile({exe_path}, arguments={arguments})")
 
+    def _record_launch_attempt(self, app_key: str, target_path: Optional[str] = None) -> None:
+        """Record timestamp of process launch attempt for idempotency and timeout protection."""
+        flight_key = (app_key, os.path.normcase(target_path) if target_path else None)
+        self._last_launch_attempt[flight_key] = time.monotonic()
+
     async def _execute_launch(
         self, app_key: str, display_name: str, target_path: Optional[str]
     ) -> Dict[str, Any]:
@@ -412,8 +435,23 @@ class OpenApplicationTool(BaseTool):
         if reused_res is not None:
             return reused_res
 
+        # Step 1b: If no target path was specified and process is already running (e.g. VS Code single-instance), avoid duplicate launch
+        if target_path is None and app_key == "vscode" and self._is_application_process_running(app_key):
+            logger.info(f"[APP_TOOL] {display_name} process is already running in process table. Suppressing duplicate launch.")
+            return {
+                "success": True,
+                "tool": self.name,
+                "application": display_name,
+                "path": exe_path,
+                "target_path": None,
+                "reused_window": True,
+                "process_running": True,
+                "message": f"{display_name} is already open.",
+            }
+
         # Step 2: No reusable window found (or opening a distinct project/file); launch process safely
         try:
+            self._record_launch_attempt(app_key, target_path)
             logger.info(f"Opening approved application {display_name} via {exe_path} (target_path={target_path})")
             if target_path:
                 self._launch_process(exe_path, arguments=f'"{target_path}"')
@@ -502,6 +540,43 @@ class OpenApplicationTool(BaseTool):
                         cached["idempotent_cached"] = True
                         return cached
 
+                # Bounded retry / timeout guard: suppress re-launching if a launch was already initiated within the idempotency window
+                if flight_key in self._last_launch_attempt:
+                    last_attempt_time = self._last_launch_attempt[flight_key]
+                    if (now - last_attempt_time) < self.IDEMPOTENCY_WINDOW_SECONDS:
+                        logger.info(
+                            f"Open application for '{flight_key}' launch was initiated {now - last_attempt_time:.2f}s ago. "
+                            f"Suppressing duplicate launch attempt (timeout/retry idempotency guard)."
+                        )
+                        exe_path = self._locate_executable(app_key) or ""
+                        reused = self._reuse_existing_window_if_applicable(app_key, display_name, exe_path, target_path)
+                        if reused is not None:
+                            reused["idempotent_cached"] = True
+                            return reused
+                        if target_path is None and self._is_application_process_running(app_key):
+                            return {
+                                "success": True,
+                                "tool": self.name,
+                                "application": display_name,
+                                "path": exe_path,
+                                "target_path": None,
+                                "reused_window": True,
+                                "process_running": True,
+                                "idempotent_cached": True,
+                                "message": f"{display_name} is already open.",
+                            }
+                        return {
+                            "success": True,
+                            "tool": self.name,
+                            "application": display_name,
+                            "path": exe_path,
+                            "target_path": target_path,
+                            "reused_window": False,
+                            "idempotent_cached": True,
+                            "launch_in_progress": True,
+                            "message": f"{display_name} launch is already in progress.",
+                        }
+
                 in_flight_future = loop.create_future()
                 self._in_flight[flight_key] = in_flight_future
                 is_owner = True
@@ -516,11 +591,13 @@ class OpenApplicationTool(BaseTool):
             result = await self._execute_launch(app_key, display_name, target_path)
             if result.get("success"):
                 self._recent_launches[flight_key] = (time.monotonic(), result)
+            else:
+                self._last_launch_attempt.pop(flight_key, None)
             if in_flight_future and not in_flight_future.done():
                 in_flight_future.set_result(result)
             return result
         except asyncio.CancelledError:
-            # Owner was cancelled: cancel shared future so waiters terminate instead of hanging
+            # Owner was cancelled or timed out: preserve _last_launch_attempt to prevent duplicate process spawns on retry
             if in_flight_future and not in_flight_future.done():
                 in_flight_future.cancel()
             raise

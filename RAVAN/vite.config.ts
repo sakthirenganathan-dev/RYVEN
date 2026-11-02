@@ -5,6 +5,13 @@ import { defineConfig } from "@lovable.dev/vite-tanstack-config";
  * Bundles TanStack Start SSR entrypoint redirected to src/server.ts
  */
 export default defineConfig({
+  vite: {
+    server: {
+      watch: {
+        ignored: ["**/.output/**", "**/.nitro/**"],
+      },
+    },
+  },
   tanstackStart: {
     server: { entry: "server" },
   },

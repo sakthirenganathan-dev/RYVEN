@@ -958,6 +958,24 @@ class ComputerWorkflowEngine:
                 step.error = f"Step timed out after {step.timeout_sec}s"
                 step.failure_class = FailureClass.ACTION_TIMEOUT
                 logger.warning(f"[WORKFLOW_ENGINE] Step '{step.name}' timed out.")
+                if step.action == "open_application" or tool_name == "open_application":
+                    app_name = (
+                        step.arguments.get("application")
+                        or step.arguments.get("app_name")
+                        or step.application_context
+                        or ""
+                    )
+                    if app_name and await self._verify_application_running(app_name):
+                        logger.info(
+                            f"[WORKFLOW_ENGINE] Application '{app_name}' verified running despite timeout. "
+                            f"Completing step without redundant re-launch."
+                        )
+                        step.transition_to(ComputerWorkflowState.COMPLETED)
+                        step.completed_at = _utc_now_iso()
+                        await self._emit_step_telemetry(plan.workflow_id, step, ActionType.WORKFLOW_STEP_COMPLETED)
+                        return True
+                    # Bounded retry: do not spawn repeated launches on timeout
+                    break
             except Exception as exc:
                 step.error = str(exc)
                 logger.warning(f"[WORKFLOW_ENGINE] Step '{step.name}' execution error: {exc}")
@@ -1040,7 +1058,8 @@ class ComputerWorkflowEngine:
             tool_args = dict(step.arguments)
             # Remove internal keys
             tool_args.pop("target", None)
-            tool_args.pop("application", None)
+            if tool_name != "open_application":
+                tool_args.pop("application", None)
             tool_args.pop("direction", None)
             tool_args.pop("amount", None)
             res = await self.tool_reg.execute_tool(tool_name, arguments=tool_args)
